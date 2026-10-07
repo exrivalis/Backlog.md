@@ -154,7 +154,7 @@ describe("CLI Integration", () => {
 				.nothrow();
 			expect(invalidType.exitCode).not.toBe(0);
 			expect(invalidType.stderr.toString()).toContain(
-				"Document type must be one of: readme, guide, specification, other.",
+				"Document type must be one of: readme, guide, specification, change, other.",
 			);
 
 			const unsafePath = await $`bun ${CLI_PATH} doc update doc-1 --content "Nope" -p ../outside`

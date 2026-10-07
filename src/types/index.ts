@@ -213,6 +213,15 @@ export interface Decision {
 	path?: string; // Decisions-relative file path, set when listed from disk
 }
 
+export interface DecisionUpdateInput {
+	id: string;
+	title?: string;
+	/** Free-form status, matching decision create; empty values are rejected. */
+	status?: string;
+	/** Replacement markdown body; recognized sections merge into the decision, frontmatter is ignored. */
+	content?: string;
+}
+
 export interface Milestone {
 	id: string;
 	title: string;

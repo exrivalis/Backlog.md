@@ -1478,7 +1478,7 @@ export class BacklogServer {
 		const content = await req.text();
 
 		try {
-			await this.core.updateDecisionFromContent(decisionId, content);
+			await this.core.updateDecisionFromInput({ id: decisionId, content });
 			return Response.json({ success: true });
 		} catch (error) {
 			if (isAmbiguousIdError(error)) {

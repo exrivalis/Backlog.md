@@ -71,6 +71,43 @@ export interface TaskVacancyResponse {
 	cleanedTaskIds: string[];
 }
 
+/** The delete routes live beside the task (and draft) routes; documents have their own. */
+export type DeletionEndpoint = "tasks" | "docs";
+
+export interface DeletionPreviewReference {
+	relation: string;
+	sourceId: string;
+	sourceTitle: string;
+	sourcePath: string;
+	value: string;
+}
+
+export interface EntityDeletionPreview {
+	entityType: "task" | "draft" | "document";
+	requestedId: string;
+	status: "found";
+	targetId: string;
+	title: string;
+	targetPath: string;
+	references: DeletionPreviewReference[];
+	unresolvedLinks: Array<{ relation: string; value: string; reason: string }>;
+	freeTextLimit: string;
+	recoveryWarning: string;
+}
+
+export interface DeletionResolutionRequest {
+	action: "cancel" | "unlink" | "reassign";
+	replacementId?: string;
+}
+
+export interface EntityDeletionResult {
+	success: boolean;
+	deletedId: string;
+	deletedPath: string;
+	updatedIds: string[];
+	recoveryWarning: string;
+}
+
 export type TaskUpdateRequest = Omit<Partial<Task>, "milestone" | "dueDate" | "project"> & {
 	milestone?: string | null;
 	dueDate?: string | null;
@@ -378,6 +415,31 @@ export class ApiClient {
 		const response = await this.fetchWithoutRetry(`${API_BASE}/tasks/${encodeURIComponent(id)}/demote`, {
 			method: "POST",
 		});
+		return response.json();
+	}
+
+	async fetchDeletionPreview(endpoint: DeletionEndpoint, id: string): Promise<EntityDeletionPreview> {
+		const response = await fetch(`${API_BASE}/${endpoint}/${encodeURIComponent(id)}/delete`);
+		if (!response.ok) {
+			throw await toApiError(response, "Failed to load the deletion preview");
+		}
+		return response.json();
+	}
+
+	// Not retried, like archive and demote: a retried delete meets the file already gone, and its
+	// "not found" would replace the real outcome.
+	async deleteEntity(
+		endpoint: DeletionEndpoint,
+		id: string,
+		resolution: DeletionResolutionRequest,
+	): Promise<EntityDeletionResult> {
+		const response = await this.fetchWithoutRetry(`${API_BASE}/${endpoint}/${encodeURIComponent(id)}/delete`, {
+			method: "POST",
+			body: JSON.stringify(resolution),
+		});
+		if (!response.ok) {
+			throw await toApiError(response, "Failed to delete");
+		}
 		return response.json();
 	}
 

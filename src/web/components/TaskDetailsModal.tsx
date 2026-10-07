@@ -3,7 +3,14 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { isLocalEditableTask, type AcceptanceCriterion, type Milestone, type Task, type TaskComment } from "../../types";
 import { type TaskDetail, taskDependencyGraph, taskReadiness } from "../../core/task-detail";
 import Modal from "./Modal";
-import { apiClient, NetworkError, readDemotionFailureCause, readMovedFailureState } from "../lib/api";
+import {
+	apiClient,
+	NetworkError,
+	readDemotionFailureCause,
+	readMovedFailureState,
+	type EntityDeletionResult,
+} from "../lib/api";
+import { DeleteEntityDialog } from "./DeleteEntityDialog";
 import { useTheme } from "../contexts/ThemeContext";
 import MDEditor from "@uiw/react-md-editor";
 import AcceptanceCriteriaEditor from "./AcceptanceCriteriaEditor";
@@ -28,6 +35,7 @@ interface Props {
   onSaved?: () => Promise<void> | void; // refresh callback
   onSubmit?: (taskData: Partial<Task>) => Promise<void>; // For creating new tasks
   onArchive?: () => Promise<void> | void; // For archiving tasks
+  onEntityDeleted?: (result: EntityDeletionResult) => void; // For explicit deletes (distinct from archive)
   onDependencyCleanup?: (taskId: string, cleanedTaskIds: string[]) => void; // Reports records that lost a reference
   availableStatuses?: string[]; // Available statuses for new tasks
   availableTasks?: Task[]; // Shared task corpus for dependency selection
@@ -183,6 +191,7 @@ export const TaskDetailsModal: React.FC<Props> = ({
   onSaved,
   onSubmit,
   onArchive,
+  onEntityDeleted,
   onDependencyCleanup,
   availableStatuses = EMPTY_STATUSES,
   availableTasks = EMPTY_TASKS,
@@ -216,6 +225,9 @@ export const TaskDetailsModal: React.FC<Props> = ({
   const [saving, setSaving] = useState(false);
   const [demoting, setDemoting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The explicit-delete confirmation stacks on this modal; while it is open the modal's own
+  // shortcuts stay off so a stray key cannot act on the record behind the confirmation.
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
 
   // Title field for create mode
   const [title, setTitle] = useState(task?.title || "");
@@ -492,6 +504,7 @@ export const TaskDetailsModal: React.FC<Props> = ({
   // Intercept Escape to cancel edit (not close modal) when in edit mode
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (deleteDialogOpen) return;
       if (mode === "edit" && (e.key === "Escape")) {
         e.preventDefault();
         e.stopPropagation();
@@ -518,7 +531,7 @@ export const TaskDetailsModal: React.FC<Props> = ({
     };
     window.addEventListener("keydown", onKey, { capture: true });
     return () => window.removeEventListener("keydown", onKey, { capture: true } as any);
-  }, [mode, title, description, plan, notes, finalSummary, criteria, definitionOfDone, status, availableStatuses]);
+  }, [mode, deleteDialogOpen, title, description, plan, notes, finalSummary, criteria, definitionOfDone, status, availableStatuses]);
 
   // Reset local state when task changes or modal opens
   useEffect(() => {
@@ -1107,6 +1120,18 @@ export const TaskDetailsModal: React.FC<Props> = ({
     await onArchive();
   };
 
+  // The delete dialog reports success once the server removed the file; the parent decides how to
+  // surface it (toast, close, refresh). With no parent handler, still leave the deleted record.
+  const handleEntityDeleted = (result: EntityDeletionResult) => {
+    setDeleteDialogOpen(false);
+    if (onEntityDeleted) {
+      void onEntityDeleted(result);
+      return;
+    }
+    if (onSaved) void onSaved();
+    onClose();
+  };
+
   const checkedCount = (criteria || []).filter((c) => c.checked).length;
   const totalCount = (criteria || []).length;
   const definitionCheckedCount = (definitionOfDone || []).filter((c) => c.checked).length;
@@ -1114,6 +1139,11 @@ export const TaskDetailsModal: React.FC<Props> = ({
 	const isFinalStatus = isTerminalStatus(status, availableStatuses.length ? availableStatuses : DEFAULT_STATUSES);
 	const canDemote = Boolean(
 		task && !isDraftMode && !isOpenDraft && isLocalEditableTask(task) && task.source !== "completed" && !isFromOtherBranch,
+	);
+	// Deleting targets the working-copy file the same way the CLI does, so a completed record or a
+	// task on another branch is not eligible here either.
+	const canDelete = Boolean(
+		task && !isCreateMode && !isFromOtherBranch && isLocalEditableTask(task) && task.source !== "completed",
 	);
   const comments = displayComments;
 
@@ -1930,24 +1960,47 @@ export const TaskDetailsModal: React.FC<Props> = ({
           </div>
 
           {/* Archive button at bottom of sidebar */}
-		          {task && onArchive && !isFromOtherBranch && (
-		            <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-3">
-		              <button
-		                onClick={handleArchive}
-		                title="Archive canceled, duplicate, or invalid work"
-		                disabled={demoting}
-		                className="w-full inline-flex items-center justify-center px-4 py-2 bg-red-500 dark:bg-red-600 text-white text-sm font-medium rounded-md hover:bg-red-600 dark:hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-gray-800 focus:ring-red-400 dark:focus:ring-red-500 transition-colors duration-200"
-		              >
-		                <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-		                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
+	          {task && onArchive && !isFromOtherBranch && (
+	            <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-3">
+	              <button
+	                onClick={handleArchive}
+	                title="Archive canceled, duplicate, or invalid work"
+	                disabled={demoting}
+	                className="w-full inline-flex items-center justify-center px-4 py-2 bg-red-500 dark:bg-red-600 text-white text-sm font-medium rounded-md hover:bg-red-600 dark:hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-gray-800 focus:ring-red-400 dark:focus:ring-red-500 transition-colors duration-200"
+	              >
+	                <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+	                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
                 </svg>
                 Archive Task
+              </button>
+            </div>
+          )}
+
+          {/* Explicit delete, separate from the archive above: it removes the file for good */}
+          {canDelete && (
+            <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-3">
+              <button
+                onClick={() => setDeleteDialogOpen(true)}
+                title="Remove the file permanently; this cannot be undone from Backlog"
+                disabled={demoting}
+                className="w-full inline-flex items-center justify-center px-4 py-2 border border-red-300 dark:border-red-700 text-red-600 dark:text-red-400 text-sm font-medium rounded-md hover:bg-red-50 dark:hover:bg-red-900/30 focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-gray-800 focus:ring-red-400 dark:focus:ring-red-500 transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Delete Permanently
               </button>
             </div>
           )}
         </div>
 	      </div>
 		</fieldset>
+      {deleteDialogOpen && task && (
+        <DeleteEntityDialog
+          endpoint="tasks"
+          id={task.id}
+          title={task.title}
+          onClose={() => setDeleteDialogOpen(false)}
+          onDeleted={handleEntityDeleted}
+        />
+      )}
     </Modal>
   );
 };

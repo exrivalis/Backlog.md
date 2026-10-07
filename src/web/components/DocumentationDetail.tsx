@@ -5,6 +5,7 @@ import MDEditor from '@uiw/react-md-editor';
 import MermaidMarkdown from './MermaidMarkdown';
 import {type Document} from '../../types';
 import AmbiguousIdNotice from './AmbiguousIdNotice';
+import DeleteEntityDialog from './DeleteEntityDialog';
 import ErrorBoundary from '../components/ErrorBoundary';
 import {SuccessToast} from './SuccessToast';
 import { useTheme } from '../contexts/ThemeContext';
@@ -92,6 +93,7 @@ export default function DocumentationDetail({docs, onRefreshData, dateFormat}: D
     const [saveError, setSaveError] = useState<Error | null>(null);
     const [isNewDocument, setIsNewDocument] = useState(false);
     const [showSaveSuccess, setShowSaveSuccess] = useState(false);
+    const [showDeleteDialog, setShowDeleteDialog] = useState(false);
 
     useEffect(() => {
         if (id === 'new') {
@@ -258,6 +260,12 @@ export default function DocumentationDetail({docs, onRefreshData, dateFormat}: D
         setIsEditing(true);
     };
 
+    const handleDocumentDeleted = async () => {
+        setShowDeleteDialog(false);
+        await onRefreshData();
+        navigate('/documentation');
+    };
+
     const handleCancelEdit = () => {
         if (isNewDocument) {
             // Navigate back for new documents
@@ -368,19 +376,30 @@ export default function DocumentationDetail({docs, onRefreshData, dateFormat}: D
                                     )}
                                 </div>
                             </div>
-                            <div className="flex items-center space-x-3 ml-6">
+                            <div className="flex flex-wrap items-center space-x-3 ml-6">
                                 {!isEditing ? (
-                                    <button
-                                        onClick={handleEdit}
-                                        className="inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 focus:ring-offset-2 dark:focus:ring-offset-gray-900 transition-colors duration-200"
-                                    >
-                                        <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor"
-                                             viewBox="0 0 24 24">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                                                  d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
-                                        </svg>
-                                        Edit
-                                    </button>
+                                    <>
+                                        {document && !isNewDocument && (
+                                            <button
+                                                onClick={() => setShowDeleteDialog(true)}
+                                                title="Remove the file permanently; this cannot be undone from Backlog"
+                                                className="inline-flex items-center px-4 py-2 border border-red-300 dark:border-red-700 rounded-lg text-sm font-medium text-red-600 dark:text-red-400 bg-white dark:bg-gray-800 hover:bg-red-50 dark:hover:bg-red-900/30 focus:outline-none focus:ring-2 focus:ring-red-500 dark:focus:ring-red-400 focus:ring-offset-2 dark:focus:ring-offset-gray-900 transition-colors duration-200"
+                                            >
+                                                Delete
+                                            </button>
+                                        )}
+                                        <button
+                                            onClick={handleEdit}
+                                            className="inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 focus:ring-offset-2 dark:focus:ring-offset-gray-900 transition-colors duration-200"
+                                        >
+                                            <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor"
+                                                 viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                                                      d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                                            </svg>
+                                            Edit
+                                        </button>
+                                    </>
                                 ) : (
                                     <div className="flex items-center space-x-2">
 	                                        <button
@@ -457,6 +476,16 @@ export default function DocumentationDetail({docs, onRefreshData, dateFormat}: D
                                   d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
                         </svg>
                     }
+                />
+            )}
+
+            {showDeleteDialog && document && (
+                <DeleteEntityDialog
+                    endpoint="docs"
+                    id={document.id}
+                    title={document.title}
+                    onClose={() => setShowDeleteDialog(false)}
+                    onDeleted={() => void handleDocumentDeleted()}
                 />
             )}
         </ErrorBoundary>

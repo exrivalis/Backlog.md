@@ -27,7 +27,7 @@ import {
 	type TaskSearchResult,
 } from '../types';
 import { formatDependencyCleanupMessage } from '../utils/dependency-graph';
-import { ApiError, apiClient, readMovedFailureState } from './lib/api';
+import { ApiError, apiClient, readMovedFailureState, type EntityDeletionResult } from './lib/api';
 import type { TaskDetail } from '../core/task-detail';
 import type { DuplicateRepairPlan } from '../core/duplicate-task-repair';
 import { isValidTaskId } from '../utils/task-id';
@@ -878,14 +878,34 @@ function AppContent() {
   const reportDependencyCleanup = (taskId: string, cleanedTaskIds: string[] | undefined) => {
     const message = formatDependencyCleanupMessage(taskId, cleanedTaskIds ?? []);
     if (!message) return;
-    // A second cleanup within the display window must not inherit the first one's expiry, or the
-    // pending timeout clears a notice the reader has only just been shown.
+    showCleanupNotice(message);
+  };
+
+  // One auto-dismissing toast slot for records-changed notices; a second notice within the
+  // display window must not inherit the first one's expiry, or the pending timeout clears a
+  // notice the reader has only just been shown.
+  const showCleanupNotice = (message: string) => {
     if (dependencyCleanupTimer.current) clearTimeout(dependencyCleanupTimer.current);
     setDependencyCleanupNotice(message);
     dependencyCleanupTimer.current = setTimeout(() => {
       dependencyCleanupTimer.current = null;
       setDependencyCleanupNotice(null);
     }, 4000);
+  };
+
+  // Explicit deletes land here after the confirmation dialog: the file is already gone, so this
+  // closes the record's dialog, reports what changed (including the recovery warning the server
+  // attaches), and refreshes rather than inviting a retry.
+  const handleEntityDeleted = async (result: EntityDeletionResult) => {
+    const updatedNote =
+      result.updatedIds.length > 0
+        ? ` ${result.updatedIds.length} ${result.updatedIds.length === 1 ? "reference" : "references"} updated.`
+        : "";
+    showCleanupNotice(
+      `Deleted ${result.deletedId}${result.deletedPath ? ` (${result.deletedPath})` : ""}.${updatedNote} ${result.recoveryWarning}`,
+    );
+    handleCloseModal();
+    await refreshData();
   };
 
   const handleArchiveTask = async (taskId: string) => {
@@ -1076,6 +1096,7 @@ function AppContent() {
         onSaved={refreshData}
         onSubmit={handleSubmitTask}
         onArchive={editingTask ? () => handleArchiveTask(editingTask.id) : undefined}
+        onEntityDeleted={handleEntityDeleted}
         onDependencyCleanup={reportDependencyCleanup}
         availableStatuses={isDraftMode ? ['Draft', ...statuses] : statuses}
         availableTasks={tasks}

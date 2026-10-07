@@ -22,6 +22,16 @@ import { registerMcpCommand } from "./commands/mcp.ts";
 import { pickTaskForEditWizard, runTaskCreateWizard, runTaskEditWizard } from "./commands/task-wizard.ts";
 import { watchJson } from "./commands/watch-json.ts";
 import { DEFAULT_DIRECTORIES, DEFAULT_FILES, DEFAULT_STATUSES } from "./constants/index.ts";
+import {
+	buildDeletionPreview,
+	DELETION_FREE_TEXT_LIMIT,
+	DELETION_GIT_RECOVERY_WARNING,
+	type DeletionEntityType,
+	type DeletionResolution,
+	deletionRecoveryWarning,
+	formatDeletionPreview,
+	validateDeletionResolution,
+} from "./core/deletion-preview.ts";
 import { type DuplicateRepairPlan, findLocalDuplicateTaskIds } from "./core/duplicate-task-repair.ts";
 import { initializeProject } from "./core/init.ts";
 import { buildMilestoneBuckets, collectArchivedMilestoneKeys, milestoneKey } from "./core/milestones.ts";
@@ -3981,6 +3991,79 @@ taskCmd
 		}
 	});
 
+async function runDeletionPreview(
+	entityType: DeletionEntityType,
+	requestedId: string,
+	options: { preview?: boolean; unlink?: boolean; reassignTo?: string },
+): Promise<void> {
+	if (!options.preview) {
+		console.error(
+			"Nothing was deleted. Deletion is never implicit: pass --preview to list the active references a delete would affect.",
+		);
+		process.exitCode = 1;
+		return;
+	}
+	if (options.unlink && options.reassignTo !== undefined) {
+		console.error("Choose one resolution: --unlink or --reassign-to <id>.");
+		process.exitCode = 1;
+		return;
+	}
+	const cwd = await requireProjectRoot();
+	const core = new Core(cwd);
+	const preview = await buildDeletionPreview(core, entityType, requestedId);
+	if (preview.status !== "found") {
+		console.error(preview.message);
+		process.exitCode = 1;
+		return;
+	}
+	const resolution: DeletionResolution = options.unlink
+		? { action: "unlink" }
+		: options.reassignTo !== undefined
+			? { action: "reassign", replacementId: options.reassignTo }
+			: { action: "cancel" };
+	const validation = await validateDeletionResolution(core, preview, resolution);
+	const report = formatDeletionPreview(preview, validation, {
+		recoveryWarning: await deletionRecoveryWarning(core),
+	});
+	console.log(report);
+	if (!validation.ok) {
+		process.exitCode = 1;
+	}
+}
+
+addHelpSchema(taskCmd.command("delete <taskId>"), {
+	required: [{ name: "taskId", type: "Task ID", description: "Task whose deletion would be previewed" }],
+	optional: [
+		{ name: "preview", type: "Boolean", description: "Required: list the active references a delete would affect" },
+		{
+			name: "unlink",
+			type: "Boolean",
+			description: "Validate removing every listed reference from the linking records",
+		},
+		{
+			name: "reassign-to",
+			type: "Task or draft ID",
+			description: "Validate pointing every listed reference at this record instead",
+		},
+	],
+	reads: "Task, draft, completed, and document records that could reference the target",
+	writes: "None; this command previews and validates, it never deletes",
+	output: "Reference report; exit code 1 when the target or the chosen resolution is rejected",
+	warnings: [DELETION_FREE_TEXT_LIMIT, DELETION_GIT_RECOVERY_WARNING],
+	examples: [
+		"backlog task delete {{TASK_ID:1}} --preview",
+		"backlog task delete {{TASK_ID:1}} --preview --unlink",
+		"backlog task delete {{TASK_ID:1}} --preview --reassign-to {{TASK_ID:2}}",
+	],
+})
+	.description("preview the active references an explicit delete would affect")
+	.option("--preview", "list the active references a delete would affect; nothing is deleted")
+	.option("--unlink", "validate removing every listed reference from the linking records")
+	.option("--reassign-to <id>", "validate repointing every listed reference at this record")
+	.action(async (taskId: string, options: { preview?: boolean; unlink?: boolean; reassignTo?: string }) => {
+		await runDeletionPreview("task", taskId, options);
+	});
+
 taskCmd
 	.argument("[taskId]")
 	.option("--plain", "use plain text output")
@@ -3992,7 +4075,7 @@ taskCmd
 		const core = new Core(cwd);
 
 		// Don't handle commands that should be handled by specific command handlers
-		const reservedCommands = ["create", "list", "edit", "view", "archive", "complete", "demote"];
+		const reservedCommands = ["create", "list", "edit", "view", "archive", "complete", "demote", "delete"];
 		if (taskId && reservedCommands.includes(taskId)) {
 			console.error(`Unknown command: ${taskId}`);
 			taskCmd.help();
@@ -4235,6 +4318,35 @@ draftCmd
 			console.error(error instanceof Error ? error.message : String(error));
 			process.exitCode = 1;
 		}
+	});
+
+addHelpSchema(draftCmd.command("delete <draftId>"), {
+	required: [{ name: "draftId", type: "Draft ID", description: "Draft whose deletion would be previewed" }],
+	optional: [
+		{ name: "preview", type: "Boolean", description: "Required: list the active references a delete would affect" },
+		{
+			name: "unlink",
+			type: "Boolean",
+			description: "Validate removing every listed reference from the linking records",
+		},
+		{
+			name: "reassign-to",
+			type: "Task or draft ID",
+			description: "Validate pointing every listed reference at this record instead",
+		},
+	],
+	reads: "Task, draft, completed, and document records that could reference the draft",
+	writes: "None; this command previews and validates, it never deletes",
+	output: "Reference report; exit code 1 when the target or the chosen resolution is rejected",
+	warnings: [DELETION_FREE_TEXT_LIMIT, DELETION_GIT_RECOVERY_WARNING],
+	examples: ["backlog draft delete DRAFT-1 --preview", "backlog draft delete DRAFT-1 --preview --unlink"],
+})
+	.description("preview the active references an explicit delete would affect")
+	.option("--preview", "list the active references a delete would affect; nothing is deleted")
+	.option("--unlink", "validate removing every listed reference from the linking records")
+	.option("--reassign-to <id>", "validate repointing every listed reference at this record")
+	.action(async (draftId: string, options: { preview?: boolean; unlink?: boolean; reassignTo?: string }) => {
+		await runDeletionPreview("draft", draftId, options);
 	});
 
 draftCmd
@@ -4894,6 +5006,31 @@ addHelpSchema(docCmd.command("view <docId>"), {
 			}
 			console.error(`Document ${docId} not found.`);
 		}
+	});
+
+addHelpSchema(docCmd.command("delete <docId>"), {
+	required: [{ name: "docId", type: "Document ID", description: "Document whose deletion would be previewed" }],
+	optional: [
+		{ name: "preview", type: "Boolean", description: "Required: list the active references a delete would affect" },
+		{ name: "unlink", type: "Boolean", description: "Validate removing every listed documentation link" },
+		{
+			name: "reassign-to",
+			type: "Document ID",
+			description: "Validate pointing every listed documentation link at this document instead",
+		},
+	],
+	reads: "Task, draft, and completed records whose documentation links could reference the document",
+	writes: "None; this command previews and validates, it never deletes",
+	output: "Reference report; exit code 1 when the target or the chosen resolution is rejected",
+	warnings: [DELETION_FREE_TEXT_LIMIT, DELETION_GIT_RECOVERY_WARNING],
+	examples: ["backlog doc delete doc-1 --preview", "backlog doc delete doc-1 --preview --reassign-to doc-2"],
+})
+	.description("preview the active references an explicit delete would affect")
+	.option("--preview", "list the active references a delete would affect; nothing is deleted")
+	.option("--unlink", "validate removing every listed documentation link")
+	.option("--reassign-to <id>", "validate repointing every listed documentation link at this document")
+	.action(async (docId: string, options: { preview?: boolean; unlink?: boolean; reassignTo?: string }) => {
+		await runDeletionPreview("document", docId, options);
 	});
 
 const decisionCmd = program.command("decision");

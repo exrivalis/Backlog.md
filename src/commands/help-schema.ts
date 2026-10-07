@@ -21,6 +21,8 @@ export interface HelpSchema {
 	optional?: HelpField[];
 	output?: string;
 	examples?: string[];
+	/** Limitations the requester must weigh before running the command. */
+	warnings?: string[];
 }
 
 function resolveText(value: string | (() => string) | undefined): string | undefined {
@@ -68,6 +70,9 @@ function renderHelpSchema(schema: HelpSchema): string {
 	}
 	if (schema.output) {
 		lines.push("Output:", `  - ${schema.output}`);
+	}
+	if (schema.warnings && schema.warnings.length > 0) {
+		lines.push("Warnings:", ...schema.warnings.map((warning) => `  - ${warning}`));
 	}
 	if (schema.examples && schema.examples.length > 0) {
 		lines.push("Examples:", ...schema.examples.map((example) => `  ${renderConfiguredTaskIds(example)}`));

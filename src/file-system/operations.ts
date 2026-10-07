@@ -1681,6 +1681,35 @@ export class FileSystem {
 		return { sourcePath, targetPath };
 	}
 
+	/**
+	 * Moves one document file into docs/changes/archive after its change was integrated.
+	 * The move is whole-file: identity, content, deltas, review, and integration history
+	 * are untouched, so exact-ID lookup keeps working after the move. An existing archive
+	 * file is a collision, not an overwrite.
+	 */
+	async moveDocumentToArchive(documentId: string): Promise<{ sourcePath: string; targetPath: string }> {
+		const document = findDocumentById(await this.listDocuments(), documentId);
+		if (!document?.path) {
+			throw new Error(`Document not found in the docs directory: ${documentId}`);
+		}
+		const docsDir = await this.getDocsDir();
+		const sourcePath = join(docsDir, ...normalizeDocumentRelativePath(document.path).split("/"));
+		const targetPath = join(docsDir, "changes", "archive", basename(document.path));
+		if (
+			await stat(targetPath).then(
+				() => true,
+				() => false,
+			)
+		) {
+			throw new Error(
+				`Cannot archive ${document.id}: '${basename(document.path)}' already exists in docs/changes/archive.`,
+			);
+		}
+		await this.ensureDirectoryExists(dirname(targetPath));
+		await rename(sourcePath, targetPath);
+		return { sourcePath, targetPath };
+	}
+
 	/** Lists documents, skipping files that cannot be read or parsed and collecting their paths in `unreadable`. */
 	async listDocuments(unreadable?: string[]): Promise<Document[]> {
 		try {

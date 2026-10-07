@@ -311,6 +311,13 @@ export interface DocumentUpdateInput {
 	tags?: string[];
 }
 
+/** Outcome of applying a reviewed change: each affected spec's final state and the archived history file. */
+export interface ChangeApplicationResult {
+	changeId: string;
+	specs: Array<{ specId: string; path: string; updated: boolean }>;
+	archivedPath: string;
+}
+
 export type SearchResultType = "task" | "document" | "decision";
 
 export type SearchPriorityFilter = string;

@@ -16,8 +16,11 @@ import {
 	type ChangeLinkResolver,
 	type ChangePreview,
 	parseChangeDocument,
+	parseChangeIntegration,
+	parseChangeReview,
 	specBaselineHash,
 	validateChangeContent,
+	withManagedSection,
 	withRecordedBaselines,
 } from "../markdown/change-document.ts";
 import { parseDecision, parseTask } from "../markdown/parser.ts";
@@ -31,6 +34,7 @@ import {
 	type AcceptanceCriterion,
 	type AdrGuidanceResolution,
 	type BacklogConfig,
+	type ChangeApplicationResult,
 	type Decision,
 	type DecisionReference,
 	type DecisionUpdateInput,
@@ -4664,6 +4668,216 @@ export class Core {
 			);
 		}
 		return await buildChangeDocumentPreview(document, this.changeLinkResolver());
+	}
+
+	/**
+	 * Records the explicit human review decision on a change document. The approval marker
+	 * is the only input `applyChangeDocument` trusts; it can be replaced while the change
+	 * is not integrated, and it survives archival as history.
+	 */
+	async approveChangeDocument(
+		documentId: string,
+		options: { by?: string } = {},
+		autoCommit?: boolean,
+	): Promise<Document> {
+		return await this.withCreateLock(async () => {
+			// Checked under the lock so an approve racing an apply cannot write a review
+			// record into a change that was just integrated and archived.
+			const document = await this.requireChangeDocument(documentId);
+			this.assertChangeNotIntegrated(document);
+			const reviewer = options.by?.trim();
+			const now = new Date().toISOString().slice(0, 16).replace("T", " ");
+			const approved: Document = {
+				...document,
+				rawContent: withManagedSection(document.rawContent, "Review", [
+					`Approved${reviewer ? ` by ${reviewer}` : ""} on ${now}.`,
+				]),
+				updatedDate: now,
+			};
+			const { relativePath, removedFilepaths } = await this.fs.saveDocument(
+				approved,
+				getDocumentSubPathFromRelativePath(document.path),
+			);
+			approved.path = relativePath;
+			if (await this.shouldAutoCommit(autoCommit)) {
+				await this.commitWrittenFile(
+					`backlog: Approve change ${document.id}`,
+					removedFilepaths,
+					documentAbsolutePath(this, relativePath),
+				);
+			}
+			return (await this.getDocument(document.id)) ?? approved;
+		});
+	}
+
+	/**
+	 * Integrates a reviewed change into its affected current specs and archives the change
+	 * as history. Apply is refused for a change without an explicit approval record and for
+	 * one that was already integrated; a linked task's status is never consulted. The whole
+	 * operation runs under the shared create lock: the change is revalidated against the
+	 * current specifications immediately before any write (a stale baseline refuses), every
+	 * spec is written from the same validated preview projection, a failed write rolls the
+	 * already-written specs back to their exact prior content with a full diagnostic, and
+	 * only then is the Integrated record written and the file archived under its own ID.
+	 */
+	async applyChangeDocument(documentId: string, autoCommit?: boolean): Promise<ChangeApplicationResult> {
+		const document = await this.requireChangeDocument(documentId);
+		this.assertChangeNotIntegrated(document);
+		this.assertChangeApproved(document);
+
+		return await this.withCreateLock(async () => {
+			// Re-read and re-check under the lock: the document may have changed since.
+			const change = await this.requireChangeDocument(documentId);
+			this.assertChangeNotIntegrated(change);
+			this.assertChangeApproved(change);
+
+			const preview = await this.buildChangePreview(change.id);
+			if (!preview.valid) {
+				throw new Error(
+					[
+						`Change ${change.id} cannot be applied: it is not valid against the current specifications.`,
+						...preview.issues.map((issue) => `- line ${issue.line}: ${issue.message}`),
+					].join("\n"),
+				);
+			}
+
+			const written: Array<{ updated: Document; previous: Document }> = [];
+			const specs: ChangeApplicationResult["specs"] = [];
+			let marked = false;
+			let sourcePath = "";
+			let targetPath = "";
+			try {
+				for (const projected of preview.specs) {
+					const specDocument = await this.getDocument(projected.specId);
+					if (!specDocument) {
+						throw new Error(`Specification ${projected.specId} disappeared while applying ${change.id}.`);
+					}
+					if (projected.resultingContent === specDocument.rawContent) {
+						specs.push({
+							specId: projected.specId,
+							path: specDocument.path ?? "",
+							updated: false,
+						});
+						continue;
+					}
+					const now = new Date().toISOString().slice(0, 16).replace("T", " ");
+					const updated: Document = {
+						...specDocument,
+						rawContent: projected.resultingContent,
+						updatedDate: now,
+					};
+					const { relativePath } = await this.fs.saveDocument(
+						updated,
+						getDocumentSubPathFromRelativePath(specDocument.path),
+					);
+					updated.path = relativePath;
+					written.push({ updated, previous: specDocument });
+					specs.push({ specId: projected.specId, path: relativePath, updated: true });
+				}
+
+				const integratedDate = new Date().toISOString().slice(0, 16).replace("T", " ");
+				const integrated: Document = {
+					...change,
+					rawContent: withManagedSection(change.rawContent, "Integrated", [
+						`Integrated on ${integratedDate} into ${preview.specs.map((spec) => spec.specId).join(", ")}.`,
+					]),
+					updatedDate: integratedDate,
+				};
+				marked = true;
+				await this.fs.saveDocument(integrated, getDocumentSubPathFromRelativePath(change.path));
+				({ sourcePath, targetPath } = await this.fs.moveDocumentToArchive(change.id));
+			} catch (error) {
+				throw await this.rollbackAppliedSpecs(change, written, marked, error);
+			}
+
+			if (await this.shouldAutoCommit(autoCommit)) {
+				const repoRoot = await this.git.stageFileMove(sourcePath, targetPath);
+				for (const { updated } of written) {
+					await this.git.addFile(documentAbsolutePath(this, updated.path ?? ""));
+				}
+				await this.git.commitFiles(
+					`backlog: Apply change ${change.id}`,
+					[...written.map(({ updated }) => documentAbsolutePath(this, updated.path ?? "")), sourcePath, targetPath],
+					repoRoot,
+				);
+			}
+
+			return { changeId: change.id, specs, archivedPath: targetPath };
+		});
+	}
+
+	/**
+	 * Restores every file a failed apply touched — written specs, and the change document
+	 * when its Integrated record was already written — then reports exactly what happened.
+	 */
+	private async rollbackAppliedSpecs(
+		change: Document,
+		written: Array<{ updated: Document; previous: Document }>,
+		marked: boolean,
+		cause: unknown,
+	): Promise<Error> {
+		const rollbackFailures: string[] = [];
+		for (const { previous } of written) {
+			try {
+				await this.fs.saveDocument(previous, getDocumentSubPathFromRelativePath(previous.path));
+			} catch (rollbackError) {
+				rollbackFailures.push(
+					`${previous.id}: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
+				);
+			}
+		}
+		if (marked) {
+			try {
+				await this.fs.saveDocument(change, getDocumentSubPathFromRelativePath(change.path));
+			} catch (rollbackError) {
+				rollbackFailures.push(
+					`${change.id}: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
+				);
+			}
+		}
+		const causeMessage = cause instanceof Error ? cause.message : String(cause);
+		const lines = [`Change ${change.id} could not be applied: ${causeMessage}`];
+		if (rollbackFailures.length === 0) {
+			if (written.length > 0) {
+				lines.push(
+					`Rolled back ${written.map(({ previous }) => previous.id).join(", ")} to their exact content from before this apply.`,
+				);
+			}
+			lines.push(`No specification was left modified, and ${change.id} was not marked integrated or archived.`);
+		} else {
+			lines.push(
+				`Rollback failed for ${rollbackFailures.join("; ")}. Those files may hold partially applied content; compare them with 'backlog doc preview ${change.id}' and Git before retrying.`,
+			);
+		}
+		return new Error(lines.join("\n"));
+	}
+
+	private async requireChangeDocument(documentId: string): Promise<Document> {
+		const document = await this.getDocument(documentId);
+		if (!document) {
+			throw new Error(`Document not found: ${documentId}`);
+		}
+		if (document.type !== "change") {
+			throw new Error(
+				`Document ${documentId} is a ${document.type} document. Only change documents can be approved and applied.`,
+			);
+		}
+		return document;
+	}
+
+	private assertChangeApproved(change: Document): void {
+		if (parseChangeReview(change.rawContent).approved) return;
+		throw new Error(
+			`Change ${change.id} has not been reviewed. Record an explicit approval with 'backlog doc approve ${change.id}' first; a linked task's status is never treated as approval.`,
+		);
+	}
+
+	private assertChangeNotIntegrated(change: Document): void {
+		const integration = parseChangeIntegration(change.rawContent);
+		if (!integration.integrated) return;
+		throw new Error(
+			`Change ${change.id} was already integrated on ${integration.integratedDate ?? "an unknown date"}; applying it again is refused.`,
+		);
 	}
 
 	async createDocumentFromInput(input: DocumentCreateInput, autoCommit?: boolean): Promise<Document> {

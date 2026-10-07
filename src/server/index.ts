@@ -4,6 +4,15 @@ import type { Server, ServerWebSocket } from "bun";
 import { DEFAULT_STATUSES } from "../constants/index.ts";
 import { Core, TaskArchiveStatusError } from "../core/backlog.ts";
 import type { ContentStore } from "../core/content-store.ts";
+import {
+	buildDeletionPreview,
+	DELETION_FREE_TEXT_LIMIT,
+	type DeletionEntityType,
+	type DeletionPreview,
+	DeletionPreviewChangedError,
+	type DeletionResolution,
+	deletionRecoveryWarning,
+} from "../core/deletion-preview.ts";
 import { initializeProject } from "../core/init.ts";
 import type { SearchService } from "../core/search-service.ts";
 import { getTaskStatistics } from "../core/statistics.ts";
@@ -58,8 +67,14 @@ function isDraftId(taskId: string): boolean {
 const WEB_TASK_LOOKUP_HINT =
 	"Task lookups read only the local working copy; a task that exists only on another branch cannot be referenced yet.";
 
+/** Core deletion errors borrow the CLI's flag spelling; the browser has no flags to re-run. */
+const CLI_PREVIEW_RERUN_HINT = "Re-run with --preview";
+const WEB_PREVIEW_RERUN_HINT = "Close this dialog and start the delete again";
+
 function formatErrorForWeb(message: string): string {
-	return message.replace(LOCAL_TASK_LOOKUP_HINT, WEB_TASK_LOOKUP_HINT);
+	return message
+		.replace(LOCAL_TASK_LOOKUP_HINT, WEB_TASK_LOOKUP_HINT)
+		.replace(CLI_PREVIEW_RERUN_HINT, WEB_PREVIEW_RERUN_HINT);
 }
 
 type DueDatePayloadResult = { ok: true; value: string | null | undefined } | { ok: false; error: string };
@@ -69,7 +84,10 @@ type DueDatePayloadResult = { ok: true; value: string | null | undefined } | { o
  * response carries it so a client refreshes and reports what happened instead of retrying a move
  * that already took place.
  */
-function readMovedState(error: unknown, key: "archiveState" | "demotionState"): "moved" | "partial" | undefined {
+function readMovedState(
+	error: unknown,
+	key: "archiveState" | "demotionState" | "deletionState",
+): "moved" | "partial" | undefined {
 	const state = typeof error === "object" && error !== null ? (error as Record<string, unknown>)[key] : undefined;
 	return state === "moved" || state === "partial" ? state : undefined;
 }
@@ -435,6 +453,12 @@ export class BacklogServer {
 					"/api/tasks/:id/complete": {
 						POST: async (req: Request & { params: { id: string } }) => await this.handleCompleteTask(req.params.id),
 					},
+					"/api/tasks/:id/delete": {
+						GET: async (req: Request & { params: { id: string } }) =>
+							await this.handleDeletionPreview(isDraftId(req.params.id) ? "draft" : "task", req.params.id),
+						POST: async (req: Request & { params: { id: string } }) =>
+							await this.handleEntityDelete(isDraftId(req.params.id) ? "draft" : "task", req.params.id, req),
+					},
 					"/api/tasks/:id/demote": {
 						POST: async (req: Request & { params: { id: string } }) => await this.handleDemoteTask(req.params.id),
 					},
@@ -455,6 +479,12 @@ export class BacklogServer {
 					"/api/docs/:id": {
 						GET: async (req: Request & { params: { id: string } }) => await this.handleGetDoc(req.params.id),
 						PUT: async (req: Request & { params: { id: string } }) => await this.handleUpdateDoc(req, req.params.id),
+					},
+					"/api/docs/:id/delete": {
+						GET: async (req: Request & { params: { id: string } }) =>
+							await this.handleDeletionPreview("document", req.params.id),
+						POST: async (req: Request & { params: { id: string } }) =>
+							await this.handleEntityDelete("document", req.params.id, req),
 					},
 					"/api/decisions": {
 						GET: async () => await this.handleListDecisions(),
@@ -1240,6 +1270,123 @@ export class BacklogServer {
 			}
 			throw error;
 		}
+	}
+
+	/**
+	 * Explicit deletion preview and execution. These routes are distinct from DELETE /api/tasks/:id,
+	 * which stays an archive: deleting removes the file permanently, so it always goes through the
+	 * same core preview and validation the CLI uses, and never as a side effect of another action.
+	 */
+	private async buildFoundDeletionPreview(
+		entityType: DeletionEntityType,
+		requestedId: string,
+	): Promise<DeletionPreview | Response> {
+		try {
+			const preview = await buildDeletionPreview(this.core, entityType, requestedId);
+			if (preview.status === "found") return preview;
+			const status = preview.status === "not-found" ? 404 : preview.status === "ambiguous" ? 409 : 400;
+			return Response.json({ error: preview.message }, { status });
+		} catch (error) {
+			if (error instanceof Error && (isAmbiguousIdError(error) || isAmbiguousTaskIdError(error))) {
+				return Response.json({ error: formatErrorForWeb(error.message) }, { status: 409 });
+			}
+			console.error("Error building deletion preview:", error);
+			return Response.json({ error: "Failed to build deletion preview" }, { status: 500 });
+		}
+	}
+
+	private async handleDeletionPreview(entityType: DeletionEntityType, requestedId: string): Promise<Response> {
+		const preview = await this.buildFoundDeletionPreview(entityType, requestedId);
+		if (preview instanceof Response) return preview;
+		return Response.json({
+			...preview,
+			freeTextLimit: DELETION_FREE_TEXT_LIMIT,
+			recoveryWarning: await deletionRecoveryWarning(this.core),
+		});
+	}
+
+	private async parseDeletionResolution(req: Request): Promise<DeletionResolution | Response> {
+		let body: unknown;
+		try {
+			body = await req.json();
+		} catch {
+			return Response.json({ error: "Request body must be valid JSON." }, { status: 400 });
+		}
+		if (!body || typeof body !== "object" || Array.isArray(body)) {
+			return Response.json({ error: "Request body must be a JSON object." }, { status: 400 });
+		}
+		const { action, replacementId } = body as { action?: unknown; replacementId?: unknown };
+		if (action !== "cancel" && action !== "unlink" && action !== "reassign") {
+			return Response.json({ error: "action must be cancel, unlink, or reassign." }, { status: 400 });
+		}
+		if (replacementId !== undefined && typeof replacementId !== "string") {
+			return Response.json({ error: "replacementId must be a string." }, { status: 400 });
+		}
+		return action === "reassign" ? { action, replacementId } : { action };
+	}
+
+	private async handleEntityDelete(
+		entityType: DeletionEntityType,
+		requestedId: string,
+		req: Request,
+	): Promise<Response> {
+		const resolution = await this.parseDeletionResolution(req);
+		if (resolution instanceof Response) return resolution;
+		// The preview is rebuilt here rather than trusted from the request: the reference set the
+		// core operations re-validate under their locks is derived from this fresh read, so a
+		// reference added after the browser opened its confirmation is still cleaned or rejected.
+		const preview = await this.buildFoundDeletionPreview(entityType, requestedId);
+		if (preview instanceof Response) return preview;
+		try {
+			const recoveryWarning = await deletionRecoveryWarning(this.core);
+			let deletedPath: string;
+			let updatedIds: string[];
+			if (entityType === "document") {
+				const result = await this.core.deleteDocument(preview.targetId ?? requestedId, resolution);
+				deletedPath = result.path;
+				updatedIds = result.updates.map((update) => update.sourceId);
+			} else {
+				const result = await this.core.deleteEntity(preview, resolution);
+				deletedPath = result.deletedPath;
+				updatedIds = result.updatedSources.map((source) => source.id);
+			}
+			this.broadcastDataUpdated();
+			return Response.json({
+				success: true,
+				deletedId: preview.targetId,
+				deletedPath,
+				updatedIds,
+				recoveryWarning,
+			});
+		} catch (error) {
+			return this.deletionErrorResponse(error);
+		}
+	}
+
+	private deletionErrorResponse(error: unknown): Response {
+		if (error instanceof DeletionPreviewChangedError) {
+			return Response.json({ error: formatErrorForWeb(error.message) }, { status: 409 });
+		}
+		if (!(error instanceof Error)) {
+			console.error("Error deleting entity:", error);
+			return Response.json({ error: "Failed to delete" }, { status: 500 });
+		}
+		const message = formatErrorForWeb(error.message);
+		const conflict =
+			isAmbiguousIdError(error) || isAmbiguousTaskIdError(error) || isTaskLockError(error) || isCreateLockError(error);
+		const deletionState = readMovedState(error, "deletionState");
+		if (conflict) {
+			return Response.json({ error: message }, { status: 409 });
+		}
+		if (deletionState) {
+			return Response.json({ error: message, deletionState }, { status: 500 });
+		}
+		// Only a target that is already gone is 404; an invalid replacement is a bad request with
+		// the same core message the CLI prints.
+		if (/not found\. Nothing (?:was|would be) deleted\.$/.test(message)) {
+			return Response.json({ error: message }, { status: 404 });
+		}
+		return Response.json({ error: message }, { status: 400 });
 	}
 
 	private async handleCompleteTask(taskId: string): Promise<Response> {

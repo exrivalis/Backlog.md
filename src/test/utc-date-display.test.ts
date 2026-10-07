@@ -88,6 +88,6 @@ describe("UTC date display", () => {
 
 		expect(output).toContain("Created: 2026-06-07 (UTC)");
 		expect(output).toContain("Updated: 2026-06-07 21:54 (UTC)");
-		expect(output).toContain("#1 - @reviewer - 2026-06-07 21:54 (UTC)");
+		expect(output).toMatch(/#1@[0-9a-f]{8} - @reviewer - 2026-06-07 21:54 \(UTC\)/);
 	});
 });

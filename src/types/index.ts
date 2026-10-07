@@ -30,11 +30,25 @@ export interface AcceptanceCriterionInput {
 	checked?: boolean;
 }
 
+/**
+ * One retained correction of a comment. Edited entries keep the body this
+ * correction replaced; redacted entries deliberately keep none, so redacting
+ * removes the content while the record that a redaction happened stays visible.
+ */
+export interface TaskCommentHistoryEntry {
+	action: "edited" | "redacted";
+	date: string;
+	editor?: string;
+	/** The comment body this correction replaced; absent for redactions. */
+	body?: string;
+}
+
 export interface TaskComment {
 	index: number;
 	body: string;
 	createdDate: string;
 	author?: string;
+	history?: TaskCommentHistoryEntry[];
 }
 
 export interface TaskCommentInput {
@@ -169,6 +183,10 @@ export interface TaskUpdateInput {
 	appendImplementationNotes?: string[];
 	clearImplementationNotes?: boolean;
 	appendComments?: Array<TaskCommentInput | string>;
+	/** Correct one existing comment in place, keeping its author/time and retaining the replaced body. */
+	editComment?: { target: string; body: string; editor: string };
+	/** Redact one existing comment: the body becomes a visible notice and the original is not retained. */
+	redactComment?: { target: string; editor: string };
 	finalSummary?: string;
 	appendFinalSummary?: string[];
 	clearFinalSummary?: boolean;

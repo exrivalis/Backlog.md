@@ -469,7 +469,7 @@ describe("MCP task tools (MVP)", () => {
 		const editText = getText(editResult.content);
 		expect(editText).toMatch(/Created: \d{4}-\d{2}-\d{2} \d{2}:\d{2} \(UTC\)/);
 		expect(editText).toContain("Comments:");
-		expect(editText).toMatch(/#1 - @mcp - \d{4}-\d{2}-\d{2} \d{2}:\d{2} \(UTC\)/);
+		expect(editText).toMatch(/#1@[0-9a-f]{8} - @mcp - \d{4}-\d{2}-\d{2} \d{2}:\d{2} \(UTC\)/);
 		expect(editText).toContain("MCP comment body");
 
 		const viewResult = await mcpServer.testInterface.callTool({

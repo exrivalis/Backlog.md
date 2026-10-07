@@ -1,11 +1,11 @@
 ---
 id: FORK-5
 title: Edit milestone descriptions through the CLI
-status: In Progress
+status: Done
 assignee:
   - '@alex-agent'
 created_date: '2026-10-07 07:58'
-updated_date: '2026-10-07 09:08'
+updated_date: '2026-10-07 10:54'
 labels: []
 dependencies: []
 documentation:
@@ -38,9 +38,9 @@ Create a temporary milestone, edit and clear its description, confirm linked tas
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Description replacement and clear are possible through public CLI commands.
-- [ ] #2 Editing a description leaves the milestone ID and linked tasks unchanged.
-- [ ] #3 Unknown or ambiguous IDs fail safely and CLI help/tests cover the operation.
+- [x] #1 Description replacement and clear are possible through public CLI commands.
+- [x] #2 Editing a description leaves the milestone ID and linked tasks unchanged.
+- [x] #3 Unknown or ambiguous IDs fail safely and CLI help/tests cover the operation.
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -51,3 +51,15 @@ Create a temporary milestone, edit and clear its description, confirm linked tas
 3. Validate the active target before writing and preserve ID, title, due date and linked tasks; fail closed on missing/ambiguous names.
 4. Test replace, clear and invalid targets in temporary filesystem-only projects with linked tasks; run scoped Bun tests and static checks.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented milestone edit path end to end. CLI: new 'milestone edit <name>' subcommand (src/cli.ts) with --description/-d replace and --clear-description, mutually exclusive, both required-guarded. Shared handler editMilestone + MilestoneEditArgs (src/mcp/tools/milestones/handlers.ts) resolves the active milestone via findActiveMilestoneByAlias before any write, so unknown and ambiguous titles fail closed as 'Milestone not found'; no-change input returns an idempotent 'No changes made' without rewriting the file. Core editMilestoneDescription (src/core/backlog.ts) mirrors renameMilestone's autoCommit and rollback pattern (commit 'backlog: Edit milestone description <id>'). Filesystem updateMilestoneDescription (src/file-system/operations.ts) rewrites only the ## Description section in place; clearing restores the create-default 'Milestone: <title>' placeholder so cleared state equals a milestone created without a description. Section regex hoisted to shared module constant reused by rewriteDefaultMilestoneDescription. ID, filename, title, due date, and task milestone values are untouched. MCP tool registration deliberately not added (task scope is CLI; handler is shared so adoption is a one-line wrapper later). Tests: src/test/cli-milestone-description-edit.test.ts (9 tests: replace, clear, idempotent no-change, unknown target without writes, ambiguous duplicate titles fail closed, flag conflicts, missing flag, help coverage, autoCommit commit message) plus existing milestone suites re-run.
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Added 'backlog milestone edit <name>' with --description/-d to replace and --clear-description to clear a milestone description. The edit reuses the existing milestone mutation path (shared MilestoneHandlers handler, Core.editMilestoneDescription, filesystem updateMilestoneDescription), rewrites only the ## Description section in place, and leaves milestone ID, filename, title, due date, and linked task values untouched. Clearing restores the same 'Milestone: <title>' default a milestone created without a description gets. Identity is resolved against active milestones before any write; unknown or ambiguous titles fail closed with 'Milestone not found' and no file changes. Verified: 9 new tests in src/test/cli-milestone-description-edit.test.ts pass (replace with linked task, clear, idempotent no-change, unknown target without writes, ambiguous duplicate titles fail closed, flag conflicts, help output, autoCommit message 'backlog: Edit milestone description m-0'); existing milestone suites re-run (68 tests across cli-milestone-management, mcp-milestones, cli-task-milestone, milestone-filter) with 0 failures; bunx tsc --noEmit clean; bunx biome check clean on changed files; manual CLI smoke test confirmed multi-line description replacement and help listing.
+<!-- SECTION:FINAL_SUMMARY:END -->

@@ -63,7 +63,9 @@ describe("help popup shortcuts", () => {
 			const count = getHelpShortcuts(context).length;
 			// 4 rows of chrome (borders, top spacer, help line) leave one row per shortcut.
 			expect(getHelpPopupHeight(count, 40) - 4).toBe(count);
-			expect(getHelpPopupHeight(count, 24) - 4).toBe(count);
+			// The board menu alone is taller than a 24-row terminal, so only the roomier
+			// height still shows every row; the loop below caps the rest to the screen.
+			expect(getHelpPopupHeight(count, 30) - 4).toBe(count);
 			for (const screenHeight of [4, 6, 10, 14, 18, 24, 30]) {
 				expect(getHelpPopupHeight(count, screenHeight)).toBeLessThanOrEqual(screenHeight);
 			}
@@ -102,7 +104,7 @@ describe("help popup shortcuts", () => {
 			for (let index = 0; index <= shortMaxOffset; index += 1) pressKey(mutableScreen.focused, "down");
 			expect(viewport?.childBase).toBe(shortMaxOffset);
 
-			mutableScreen.height = 24;
+			mutableScreen.height = 26;
 			mutableScreen.emit("resize");
 			widgets = collectWidgets(screen as unknown as { children?: unknown[] });
 			const expandedViewport = widgets.find((widget) => widget.type === "scrollable-box");

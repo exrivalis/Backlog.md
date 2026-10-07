@@ -222,8 +222,18 @@ export async function promptText(message: string, defaultValue = ""): Promise<st
 	return answer || defaultValue;
 }
 
+/**
+ * One extra key action a viewer caller can bind, e.g. the document viewer's explicit delete.
+ * `hint` renders in the action bar; `run` returns whether to close the viewer and an optional
+ * transient note (an error message, usually) to show in its place.
+ */
+export interface ScrollableViewerAction {
+	hint: string;
+	run: (screen: ScreenInterface, refocus: () => void) => Promise<{ close?: boolean; note?: string }>;
+}
+
 // Display long content in a scrollable viewer.
-export async function scrollableViewer(content: string): Promise<void> {
+export async function scrollableViewer(content: string, options?: { action?: ScrollableViewerAction }): Promise<void> {
 	if (output.isTTY === false) {
 		console.log(content);
 		return;
@@ -234,6 +244,20 @@ export async function scrollableViewer(content: string): Promise<void> {
 			style: {},
 		});
 
+		const action = options?.action;
+		let noteTimer: ReturnType<typeof setTimeout> | null = null;
+		const hintBar = action
+			? box({
+					parent: screen,
+					bottom: 0,
+					left: 0,
+					width: "100%",
+					height: 1,
+					tags: true,
+					content: ` {cyan-fg}[↑↓]{/} Scroll | ${action.hint} | {cyan-fg}[q/Esc]{/} Close`,
+				})
+			: null;
+
 		const viewer = box({
 			parent: screen,
 			content,
@@ -243,7 +267,7 @@ export async function scrollableViewer(content: string): Promise<void> {
 			vi: true,
 			mouse: true,
 			width: "100%",
-			height: "100%",
+			height: hintBar ? "100%-1" : "100%",
 			padding: { left: 1, right: 1 },
 			wrap: true,
 			scrollbar: { ch: " ", inverse: true },
@@ -252,7 +276,41 @@ export async function scrollableViewer(content: string): Promise<void> {
 
 		addScrollKeys(viewer, screen);
 
+		const showNote = (note: string) => {
+			if (!hintBar) return;
+			if (noteTimer) {
+				clearTimeout(noteTimer);
+			}
+			hintBar.setContent(` {red-fg}${note}{/}`);
+			screen.render();
+			noteTimer = setTimeout(() => {
+				noteTimer = null;
+				hintBar.setContent(` {cyan-fg}[↑↓]{/} Scroll | ${action?.hint} | {cyan-fg}[q/Esc]{/} Close`);
+				screen.render();
+			}, 5000);
+		};
+
+		if (action) {
+			viewer.key(["d", "D"], () => {
+				void (async () => {
+					const result = await action.run(screen, () => {
+						viewer.focus();
+						screen.render();
+					});
+					if (result.note) showNote(result.note);
+					if (result.close) {
+						screen.destroy();
+						resolve();
+					}
+				})();
+				return false;
+			});
+		}
+
 		screen.key(["escape", "q", "C-c"], () => {
+			if (noteTimer) {
+				clearTimeout(noteTimer);
+			}
 			screen.destroy();
 			resolve();
 		});

@@ -39,6 +39,11 @@ export const DELETION_NO_GIT_WARNING =
 
 const ENTITY_LABELS: Record<DeletionEntityType, string> = { task: "Task", draft: "Draft", document: "Document" };
 
+/** Human label for a deletable entity kind, shared by the CLI and TUI renderers. */
+export function deletionEntityLabel(entityType: DeletionEntityType): string {
+	return ENTITY_LABELS[entityType];
+}
+
 /** One resolvable inbound structured reference that deletion would break. */
 export interface DeletionPreviewReference {
 	relation: DeletionReferenceRelation;
@@ -621,11 +626,21 @@ const RELATION_LABELS: Record<DeletionReferenceRelation, string> = {
 	documentation: "documentation link",
 };
 
+/** Human label for one reference relation, shared by the CLI and TUI renderers. */
+export function deletionRelationLabel(relation: DeletionReferenceRelation): string {
+	return RELATION_LABELS[relation];
+}
+
 const UNRESOLVED_REASONS: Record<DeletionUnresolvedLink["reason"], string> = {
 	missing: "resolves to no record",
 	ambiguous: "matches several records",
 	invalid: "is not a valid ID",
 };
+
+/** Human explanation for one unresolved link, shared by the CLI and TUI renderers. */
+export function deletionUnresolvedReason(link: DeletionUnresolvedLink): string {
+	return UNRESOLVED_REASONS[link.reason];
+}
 
 export interface FormatDeletionPreviewOptions {
 	/** The recovery warning matching the project, from {@link deletionRecoveryWarning}. */

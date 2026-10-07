@@ -116,6 +116,29 @@ export function parseSpecificationRequirements(content: string): ParsedSpecifica
 	return { requirements, scenarios, issues };
 }
 
+/**
+ * Returns the [start, end) line range of the requirement block whose heading is on the
+ * 0-based startLine: the heading plus everything nested under it, stopping before the
+ * next heading that closes a requirement. Fenced code never closes a block, so
+ * requirement-shaped headings inside fences stay part of it.
+ */
+export function requirementBlockRange(lines: string[], startLine: number): { start: number; end: number } {
+	let end = lines.length;
+	let inFence = false;
+	for (let index = startLine + 1; index < lines.length; index++) {
+		const line = lines[index] ?? "";
+		if (FENCE.test(line)) {
+			inFence = !inFence;
+			continue;
+		}
+		if (!inFence && CLOSES_REQUIREMENT.test(line)) {
+			end = index;
+			break;
+		}
+	}
+	return { start: startLine, end };
+}
+
 /** Throws one actionable, multi-line error when specification content breaks the convention. */
 export function validateSpecificationContent(content: string): void {
 	const { issues } = parseSpecificationRequirements(content);

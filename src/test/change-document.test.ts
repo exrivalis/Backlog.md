@@ -1,5 +1,12 @@
 import { describe, expect, it } from "bun:test";
-import { type ChangeLinkResolver, parseChangeDocument, validateChangeContent } from "../markdown/change-document.ts";
+import {
+	buildChangeDocumentPreview,
+	type ChangeLinkResolver,
+	parseChangeDocument,
+	specBaselineHash,
+	validateChangeContent,
+	withRecordedBaselines,
+} from "../markdown/change-document.ts";
 import type { Document } from "../types/index.ts";
 
 const SESSION_SPEC = `# Session behavior
@@ -25,28 +32,31 @@ const FILE_SPEC = `# File naming
 The system SHALL name files in kebab-case.
 `;
 
-const VALID_CHANGE = `# Change: Warn before expiry
-
-## Why
-
-Sessions end silently and users lose work.
-
-## Scope
-
-The session library and its specifications.
+// Two affected specs with only modified and removed deltas: valid multi-spec change.
+const MULTI_SPEC_CHANGE = `# Change: Tighten session expiry
 
 ## Affected specs
 
 - doc-12
 - doc-13
 
-## Linked tasks
+## Modified requirements
 
-- task-3
+### Requirement: Sessions expire after 14 days [SES-1]
 
-## Related decisions
+The system SHALL expire sessions after 14 days.
 
-- decision-2
+## Removed requirements
+
+### Requirement: Expiry emails [SES-2]
+`;
+
+// One affected spec with an addition, a modification, and a removal.
+const SINGLE_SPEC_CHANGE = `# Change: Warn before expiry
+
+## Affected specs
+
+- doc-12
 
 ## Added requirements
 
@@ -68,6 +78,21 @@ The system SHALL expire sessions after 14 days.
 ## Removed requirements
 
 ### Requirement: Expiry emails [SES-2]
+`;
+
+// Several affected specs plus an addition: rejected because the target spec is ambiguous.
+const AMBIGUOUS_ADDITION_CHANGE = `# Change: Warn before expiry
+
+## Affected specs
+
+- doc-12
+- doc-13
+
+## Added requirements
+
+### Requirement: Warn before expiry [SES-3]
+
+The system SHALL warn one day before expiry.
 `;
 
 function specDocument(id: string, rawContent: string): Document {
@@ -103,23 +128,31 @@ async function expectError(content: string, resolver: ChangeLinkResolver, ...mes
 
 describe("change document parser", () => {
 	it("parses link lists and delta requirements with absolute line numbers", () => {
-		const parsed = parseChangeDocument(VALID_CHANGE);
+		const parsed = parseChangeDocument(AMBIGUOUS_ADDITION_CHANGE);
 
 		expect(parsed.affectedSpecs.map((entry) => entry.id)).toEqual(["doc-12", "doc-13"]);
-		expect(parsed.linkedTasks.map((entry) => entry.id)).toEqual(["task-3"]);
-		expect(parsed.relatedDecisions.map((entry) => entry.id)).toEqual(["decision-2"]);
 		expect(parsed.added.map((requirement) => requirement.id)).toEqual(["SES-3"]);
-		expect(parsed.modified.map((requirement) => requirement.id)).toEqual(["SES-1"]);
-		expect(parsed.removed.map((requirement) => requirement.id)).toEqual(["SES-2"]);
 		expect(parsed.issues).toEqual([]);
 
 		// Delta line numbers stay absolute so validation errors point into the document.
 		const specListLine = parsed.affectedSpecs[0]?.line ?? 0;
 		const addedLine = parsed.added[0]?.line ?? 0;
-		const removedLine = parsed.removed[0]?.line ?? 0;
 		expect(specListLine).toBeGreaterThan(0);
 		expect(addedLine).toBeGreaterThan(specListLine);
-		expect(removedLine).toBeGreaterThan(addedLine);
+	});
+
+	it("parses recorded baselines with their spec IDs and hashes", () => {
+		const content = withRecordedBaselines(
+			MULTI_SPEC_CHANGE,
+			new Map([
+				["doc-12", "abc123"],
+				["doc-13", "def456"],
+			]),
+		);
+		const parsed = parseChangeDocument(content);
+		expect(parsed.baselines.map((baseline) => baseline.specId)).toEqual(["doc-12", "doc-13"]);
+		expect(parsed.baselines.map((baseline) => baseline.hash)).toEqual(["abc123", "def456"]);
+		expect(parsed.baselines[0]?.line).toBeGreaterThan(0);
 	});
 
 	it("ignores requirement-shaped headings outside delta sections", () => {
@@ -152,13 +185,64 @@ describe("change document parser", () => {
 	});
 });
 
+describe("specification baselines", () => {
+	it("hashes content stably and sensitively", () => {
+		expect(specBaselineHash(SESSION_SPEC)).toBe(specBaselineHash(SESSION_SPEC));
+		expect(specBaselineHash(SESSION_SPEC)).not.toBe(specBaselineHash(`${SESSION_SPEC}\n`));
+	});
+
+	it("records baselines sorted by spec ID and strips an existing section", () => {
+		const recorded = withRecordedBaselines(
+			MULTI_SPEC_CHANGE,
+			new Map([
+				["doc-13", "def456"],
+				["doc-12", "abc123"],
+			]),
+		);
+		expect(recorded).toContain("\n## Baselines\n\n- doc-12: abc123\n- doc-13: def456\n");
+		expect(recorded.startsWith(MULTI_SPEC_CHANGE.trimEnd())).toBe(true);
+
+		const replaced = withRecordedBaselines(recorded, new Map([["doc-12", "fff000"]]));
+		expect(replaced).not.toContain("abc123");
+		expect(replaced).toContain("- doc-12: fff000");
+		expect(parseChangeDocument(replaced).baselines).toHaveLength(1);
+	});
+
+	it("strips the baselines section when no baselines are given", () => {
+		const recorded = withRecordedBaselines(MULTI_SPEC_CHANGE, new Map([["doc-12", "abc123"]]));
+		const stripped = withRecordedBaselines(recorded, new Map());
+		expect(stripped).not.toContain("## Baselines");
+		expect(parseChangeDocument(stripped).baselines).toEqual([]);
+	});
+});
+
 describe("change document validation", () => {
-	it("accepts a valid change linking several specs, a task, and a decision", async () => {
-		await expect(validateChangeContent(VALID_CHANGE, FULL_RESOLVER)).resolves.toBeUndefined();
+	it("accepts a valid multi-spec change with modified and removed requirements", async () => {
+		await expect(validateChangeContent(MULTI_SPEC_CHANGE, FULL_RESOLVER)).resolves.toBeUndefined();
+	});
+
+	it("accepts a single-spec change with added, modified, and removed requirements", async () => {
+		await expect(validateChangeContent(SINGLE_SPEC_CHANGE, FULL_RESOLVER)).resolves.toBeUndefined();
 	});
 
 	it("accepts a minimal change with no links or deltas", async () => {
 		await expect(validateChangeContent("# Change: note only\n", FULL_RESOLVER)).resolves.toBeUndefined();
+	});
+
+	it("rejects an added requirement when several specifications are affected", async () => {
+		await expectError(
+			AMBIGUOUS_ADDITION_CHANGE,
+			FULL_RESOLVER,
+			'Added requirement "SES-3" is ambiguous: it could join doc-12 or doc-13.',
+		);
+	});
+
+	it("rejects an added requirement without an ID", async () => {
+		await expectError(
+			"## Affected specs\n\n- doc-12\n\n## Added requirements\n\n### Requirement: Untitled\n",
+			FULL_RESOLVER,
+			"Added requirement has no ID.",
+		);
 	});
 
 	it("rejects an affected spec that matches no document", async () => {
@@ -239,5 +323,120 @@ describe("change document validation", () => {
 			FULL_RESOLVER,
 			'- line 3: Scenario "Orphaned" is not inside a requirement',
 		);
+	});
+});
+
+describe("recorded baseline validation", () => {
+	function withBaseline(content: string, baselines: Record<string, string>): string {
+		return withRecordedBaselines(content, new Map(Object.entries(baselines)));
+	}
+
+	it("accepts a change whose recorded baselines match the current specifications", async () => {
+		const content = withBaseline(SINGLE_SPEC_CHANGE, { "doc-12": specBaselineHash(SESSION_SPEC) });
+		await expect(validateChangeContent(content, FULL_RESOLVER)).resolves.toBeUndefined();
+	});
+
+	it("rejects a change whose recorded baseline is stale", async () => {
+		const content = withBaseline(SINGLE_SPEC_CHANGE, { "doc-12": "not-the-current-hash" });
+		await expectError(
+			content,
+			FULL_RESOLVER,
+			"Recorded baseline for doc-12 is stale: the specification changed after this change was written.",
+		);
+	});
+
+	it("ignores stale baselines when saving re-records them", async () => {
+		const content = withBaseline(SINGLE_SPEC_CHANGE, { "doc-12": "not-the-current-hash" });
+		await expect(
+			validateChangeContent(content, FULL_RESOLVER, { ignoreRecordedBaselines: true }),
+		).resolves.toBeUndefined();
+	});
+
+	it("rejects baselines for specifications that are not affected", async () => {
+		const content = withBaseline(SINGLE_SPEC_CHANGE, { "doc-99": "abc123" });
+		await expectError(
+			content,
+			FULL_RESOLVER,
+			'Baseline references doc-99, which is not listed under "Affected specs".',
+		);
+	});
+
+	it("rejects duplicate baselines for one specification", async () => {
+		const content = `${SINGLE_SPEC_CHANGE.trimEnd()}\n\n## Baselines\n\n- doc-12: abc123\n- doc-12: def456\n`;
+		await expectError(content, FULL_RESOLVER, "Duplicate baseline for doc-12 (first recorded on line");
+	});
+});
+
+describe("change preview projection", () => {
+	const changeDocument: Document = {
+		id: "doc-20",
+		title: "Warn before expiry",
+		type: "change",
+		createdDate: "2026-10-07 08:00",
+		rawContent: SINGLE_SPEC_CHANGE,
+	};
+
+	it("projects modified, removed, and added requirements into the resulting specification", async () => {
+		const preview = await buildChangeDocumentPreview(changeDocument, FULL_RESOLVER);
+
+		expect(preview.valid).toBe(true);
+		expect(preview.issues).toEqual([]);
+		expect(preview.specs).toHaveLength(1);
+
+		const [spec] = preview.specs;
+		expect(spec?.specId).toBe("doc-12");
+		expect(spec?.resultingContent).toBe(
+			[
+				"# Session behavior",
+				"",
+				"### Requirement: Sessions expire after 14 days [SES-1]",
+				"",
+				"The system SHALL expire sessions after 14 days.",
+				"",
+				"### Requirement: Warn before expiry [SES-3]",
+				"",
+				"The system SHALL warn one day before expiry.",
+				"",
+				"#### Scenario: Expiring soon",
+				"",
+				"- WHEN a session expires within one day",
+				"- THEN the client receives a warning",
+				"",
+			].join("\n"),
+		);
+
+		const kinds = spec?.diff.filter((line) => line.kind !== "context");
+		expect(kinds).toContainEqual({ kind: "removed", text: "The system SHALL expire sessions after 30 days." });
+		expect(kinds).toContainEqual({ kind: "added", text: "The system SHALL expire sessions after 14 days." });
+		expect(kinds).toContainEqual({ kind: "removed", text: "### Requirement: Expiry emails [SES-2]" });
+		expect(kinds).toContainEqual({ kind: "added", text: "### Requirement: Warn before expiry [SES-3]" });
+	});
+
+	it("leaves unaffected specifications byte-identical", async () => {
+		const preview = await buildChangeDocumentPreview(
+			{ ...changeDocument, rawContent: MULTI_SPEC_CHANGE },
+			FULL_RESOLVER,
+		);
+
+		expect(preview.valid).toBe(true);
+		expect(preview.specs).toHaveLength(2);
+
+		const fileSpec = preview.specs.find((spec) => spec.specId === "doc-13");
+		expect(fileSpec?.resultingContent).toBe(FILE_SPEC);
+		expect(fileSpec?.diff.every((line) => line.kind === "context")).toBe(true);
+	});
+
+	it("reports issues without projecting any specification", async () => {
+		const preview = await buildChangeDocumentPreview(
+			{
+				...changeDocument,
+				rawContent: "## Affected specs\n\n- doc-12\n\n## Modified requirements\n\n### Requirement: Anything [SES-9]\n",
+			},
+			FULL_RESOLVER,
+		);
+
+		expect(preview.valid).toBe(false);
+		expect(preview.issues.some((issue) => issue.message.includes('Requirement "SES-9" does not exist'))).toBe(true);
+		expect(preview.specs).toEqual([]);
 	});
 });

@@ -35,3 +35,9 @@ Mark finished work Done (or the configured final status). During periodic cleanu
 Use Archive (`backlog task archive {{TASK_ID:123}}`) for canceled, duplicate, or invalid work. Archiving removes incoming dependencies and task references.
 
 Use the CLI for Backlog changes. Never edit task, draft, document, decision, or milestone markdown files directly; commands preserve metadata, relationships, and history.
+
+### Decisions and ADRs
+
+`backlog decision list` and `backlog search` return applicable guidance only: accepted ADRs and ordinary decisions. Rejected, superseded, and archived ADRs are history — never cite them as current guidance for new work.
+
+For an old ID, run `backlog decision view <decision-id> --plain`. A retired ADR identifies its retired state and the accepted ADR that now governs its scope. `backlog decision list --all` shows every record, including archived ones.

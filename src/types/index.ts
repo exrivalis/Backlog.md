@@ -250,6 +250,25 @@ export interface DecisionUpdateInput {
 	content?: string;
 }
 
+/** Resolution of one decision ID against the guidance that currently governs its scope. */
+export interface AdrGuidanceResolution {
+	decision: Decision;
+	/** Present only for a retired ADR: historical evidence, not current guidance. */
+	retired?: {
+		state: string;
+		archived: boolean;
+		/** The accepted active ADR now governing the scope, or null when nothing replaces it. */
+		replacement: Decision | null;
+	};
+}
+
+/** One current structured documentation link to a decision, in an active task or draft. */
+export interface DecisionReference {
+	sourceId: string;
+	sourceTitle: string;
+	value: string;
+}
+
 export interface Milestone {
 	id: string;
 	title: string;

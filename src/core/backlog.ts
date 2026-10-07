@@ -29,8 +29,10 @@ import {
 } from "../markdown/structured-sections.ts";
 import {
 	type AcceptanceCriterion,
+	type AdrGuidanceResolution,
 	type BacklogConfig,
 	type Decision,
+	type DecisionReference,
 	type DecisionUpdateInput,
 	DOCUMENT_TYPE_VALUES,
 	type Document,
@@ -54,11 +56,14 @@ import {
 	assertAdrStatusValue,
 	assertAdrTransition,
 	isAdr,
+	isApplicableDecision,
+	isDecisionIdReference,
+	isRetiredAdr,
 	isRetiredAdrStatus,
 	scopeCoverageGaps,
 } from "../utils/adr.ts";
 import { normalizeAssignee } from "../utils/assignee.ts";
-import { decisionIdKey } from "../utils/decision-id.ts";
+import { decisionIdKey, decisionIdsEqual, findDecisionById } from "../utils/decision-id.ts";
 import { documentIdKey, documentIdsEqual, findDocumentById, normalizeDocumentId } from "../utils/document-id.ts";
 import {
 	getDocumentSubPathFromRelativePath,
@@ -1855,6 +1860,8 @@ export class Core {
 		const normalizedDocumentation = normalizeStringList(input.documentation) ?? [];
 		const normalizedModifiedFiles = normalizeStringList(input.modifiedFiles) ?? [];
 		const dueDate = normalizeDueDate(input.dueDate, "Due date");
+		// A new record must not take a retired ADR as governing guidance (doc: ADR retrieval).
+		await this.assertDocumentationLinksApplicable(normalizedDocumentation);
 
 		let status = "";
 		if (requestedStatus) {
@@ -2350,6 +2357,12 @@ export class Core {
 		};
 
 		resolveDocumentation();
+
+		// Only edits that change the documentation set are validated: links that predate a
+		// retirement are immutable historical citations, not new governing references.
+		if (input.documentation !== undefined || input.addDocumentation?.length || input.removeDocumentation?.length) {
+			await this.assertDocumentationLinksApplicable(task.documentation ?? []);
+		}
 
 		const resolveModifiedFiles = (): void => {
 			if (input.modifiedFiles === undefined) {
@@ -4397,6 +4410,104 @@ export class Core {
 		}
 
 		return (await this.fs.loadDecision(superseded.id)) ?? retired;
+	}
+
+	/**
+	 * Default decision discovery for guidance: applicable accepted ADRs plus every legacy
+	 * decision. Proposed, rejected, and superseded ADRs are excluded so agents citing default
+	 * results never treat a retired record as authoritative; archived ADRs never appear here.
+	 */
+	async listApplicableDecisions(): Promise<Decision[]> {
+		const decisions = await this.fs.listDecisions();
+		return decisions.filter(isApplicableDecision);
+	}
+
+	/**
+	 * Resolves one decision ID against the guidance that currently governs it. A retired ADR is
+	 * returned with its retired state and its authoritative replacement — the accepted active ADR
+	 * at the end of the supersession chain, across archive moves — so an explicit historical lookup
+	 * identifies history instead of presenting it as current guidance. A replacement link that
+	 * resolves to nothing, or a supersession chain that cycles, is an error.
+	 */
+	async resolveAdrGuidance(decisionId: string): Promise<AdrGuidanceResolution | null> {
+		const decision = await this.fs.loadDecision(decisionId);
+		if (!decision) return null;
+		if (!isRetiredAdr(decision)) return { decision };
+
+		const retired = {
+			state: decision.status,
+			archived: Boolean(decision.archived),
+			replacement: null as Decision | null,
+		};
+		const visited = new Set<string>([decision.id]);
+		let current = decision;
+		while (isRetiredAdr(current) && current.supersededBy) {
+			const next = await this.fs.loadDecision(current.supersededBy);
+			if (!next) {
+				throw new Error(
+					`Architecture decision ${current.id} records replacement ${current.supersededBy}, which does not exist. Fix the superseded_by link or restore the replacement file.`,
+				);
+			}
+			if (visited.has(next.id)) {
+				throw new Error(
+					`The supersession links from ${decision.id} form a cycle through ${next.id}; no authoritative replacement can be resolved.`,
+				);
+			}
+			visited.add(next.id);
+			current = next;
+		}
+		if (isRetiredAdr(current)) {
+			// Retired without a successor link: a rejection has no replacement to offer.
+			return { decision, retired };
+		}
+		if (current.status !== "accepted" || current.archived) {
+			throw new Error(
+				`Architecture decision ${decision.id} resolves to ${current.id}, which is ${
+					current.archived ? "archived" : current.status
+				} and cannot govern current work. Restore it or complete its lifecycle.`,
+			);
+		}
+		retired.replacement = current;
+		return { decision, retired };
+	}
+
+	/**
+	 * Current structured documentation links to one decision in active tasks and drafts. Prose
+	 * citations anywhere, and links inside completed or archived records, are historical evidence
+	 * this scan never reports or rewrites.
+	 */
+	async listActiveDecisionReferences(decisionId: string): Promise<DecisionReference[]> {
+		const [tasks, drafts] = await Promise.all([this.fs.listTasks(), this.fs.listDrafts()]);
+		const references: DecisionReference[] = [];
+		for (const record of [...tasks, ...drafts]) {
+			for (const entry of record.documentation ?? []) {
+				if (isDecisionIdReference(entry) && decisionIdsEqual(entry, decisionId)) {
+					references.push({ sourceId: record.id, sourceTitle: record.title, value: entry });
+				}
+			}
+		}
+		return references;
+	}
+
+	/**
+	 * Validates documentation entries that spell a decision ID: a record taking a new or edited
+	 * link must not name a retired ADR as governing guidance. Links that predate a retirement are
+	 * immutable historical citations and are never checked or rewritten; entries that are not
+	 * decision IDs (paths, URLs) and IDs matching no decision stay tolerated like document links.
+	 */
+	async assertDocumentationLinksApplicable(entries: readonly string[]): Promise<void> {
+		const candidates = entries.filter(isDecisionIdReference);
+		if (candidates.length === 0) return;
+		const [active, archived] = await Promise.all([this.fs.listDecisions(), this.fs.listArchivedDecisions()]);
+		const all = [...active, ...archived];
+		for (const entry of candidates) {
+			const match = findDecisionById(all, entry);
+			if (!match || !isRetiredAdr(match)) continue;
+			const why = match.supersededBy ? `, superseded by ${match.supersededBy}` : "";
+			throw new Error(
+				`Documentation link "${entry}" points to a retired architecture decision (${match.status}${why}); link its accepted replacement instead.`,
+			);
+		}
 	}
 
 	/** Walks the supersedes chain from the ADR being retired; a path back to the replacement would close a cycle. */

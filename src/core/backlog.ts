@@ -11,7 +11,15 @@ import {
 	newTaskLockError,
 } from "../file-system/operations.ts";
 import { type GitBranchTip, type GitIndexEntry, GitOperations } from "../git/operations.ts";
-import { type ChangeLinkResolver, validateChangeContent } from "../markdown/change-document.ts";
+import {
+	buildChangeDocumentPreview,
+	type ChangeLinkResolver,
+	type ChangePreview,
+	parseChangeDocument,
+	specBaselineHash,
+	validateChangeContent,
+	withRecordedBaselines,
+} from "../markdown/change-document.ts";
 import { parseDecision, parseTask } from "../markdown/parser.ts";
 import { validateSpecificationContent } from "../markdown/spec-requirements.ts";
 import {
@@ -4447,6 +4455,40 @@ export class Core {
 		};
 	}
 
+	/**
+	 * Validates change content and records a baseline for each affected specification that
+	 * does not already carry one. Saving never enforces recorded baselines (that is the job
+	 * of `backlog doc validate`) and never rewrites an existing Baselines section, so a
+	 * proposal keeps the baselines it was written against.
+	 */
+	private async preparedChangeContent(content: string): Promise<string> {
+		const parsed = parseChangeDocument(content);
+		await validateChangeContent(content, this.changeLinkResolver(), { ignoreRecordedBaselines: true });
+		if (parsed.baselines.length > 0) return content;
+		const baselines = new Map<string, string>();
+		for (const link of parsed.affectedSpecs) {
+			const document = await this.getDocument(link.id);
+			if (document?.type === "specification") {
+				baselines.set(document.id, specBaselineHash(document.rawContent));
+			}
+		}
+		return withRecordedBaselines(content, baselines);
+	}
+
+	/** Validates a change document and projects its affected specs without touching any file. */
+	async buildChangePreview(documentId: string): Promise<ChangePreview> {
+		const document = await this.getDocument(documentId);
+		if (!document) {
+			throw new Error(`Document not found: ${documentId}`);
+		}
+		if (document.type !== "change") {
+			throw new Error(
+				`Document ${documentId} is a ${document.type} document. Validate and preview apply to change documents only.`,
+			);
+		}
+		return await buildChangeDocumentPreview(document, this.changeLinkResolver());
+	}
+
 	async createDocumentFromInput(input: DocumentCreateInput, autoCommit?: boolean): Promise<Document> {
 		const title = input.title.trim();
 		if (!title) {
@@ -4455,10 +4497,11 @@ export class Core {
 
 		const tags = normalizeStringList(input.tags);
 		const type = normalizeDocumentTypeInput(input.type) ?? "other";
+		let content = input.content ?? "";
 		if (type === "specification") {
-			validateSpecificationContent(input.content ?? "");
+			validateSpecificationContent(content);
 		} else if (type === "change") {
-			await validateChangeContent(input.content ?? "", this.changeLinkResolver());
+			content = await this.preparedChangeContent(content);
 		}
 		// doc-4 layout: change records live under docs/changes unless a path is given.
 		const subPath = normalizeDocumentSubPath(input.path ?? (type === "change" ? "changes" : undefined));
@@ -4469,7 +4512,7 @@ export class Core {
 				title,
 				type,
 				createdDate: new Date().toISOString().slice(0, 16).replace("T", " "),
-				rawContent: input.content ?? "",
+				rawContent: content,
 				...(tags && tags.length > 0 && { tags }),
 			};
 
@@ -4493,10 +4536,11 @@ export class Core {
 
 		const tags = input.tags !== undefined ? normalizeStringList(input.tags) : existingDoc.tags;
 		const type = normalizeDocumentTypeInput(input.type) ?? existingDoc.type;
+		let content = input.content;
 		if (type === "specification") {
-			validateSpecificationContent(input.content);
+			validateSpecificationContent(content);
 		} else if (type === "change") {
-			await validateChangeContent(input.content ?? "", this.changeLinkResolver());
+			content = await this.preparedChangeContent(content);
 		}
 		const subPath =
 			input.path === undefined
@@ -4507,7 +4551,7 @@ export class Core {
 			id: normalizeDocumentId(existingDoc.id),
 			title: normalizedTitle ?? existingDoc.title,
 			type,
-			rawContent: input.content,
+			rawContent: content,
 			updatedDate: new Date().toISOString().slice(0, 16).replace("T", " "),
 			tags: tags && tags.length > 0 ? tags : undefined,
 		};

@@ -59,6 +59,7 @@ import {
 	isGitRepository,
 	updateReadmeWithBoard,
 } from "./index.ts";
+import { formatChangePreview } from "./markdown/change-document.ts";
 import { MilestoneHandlers, type MilestoneRemoveArgs } from "./mcp/tools/milestones/handlers.ts";
 import type { CallToolResult } from "./mcp/types.ts";
 import {
@@ -5273,6 +5274,47 @@ addHelpSchema(docCmd.command("view <docId>"), {
 			console.error(`Document ${docId} not found.`);
 		}
 	});
+
+// Validate and preview share one read-only action: both report every actionable error
+// before any write could happen, and neither modifies a file (FORK-16 applies changes).
+const inspectChangeDocument = async (docId: string) => {
+	const cwd = await requireProjectRoot();
+	const core = new Core(cwd);
+	try {
+		const preview = await core.buildChangePreview(docId);
+		console.log(formatChangePreview(preview));
+		if (!preview.valid) process.exitCode = 1;
+	} catch (error) {
+		console.error(error instanceof Error ? error.message : String(error));
+		process.exitCode = 1;
+	}
+};
+
+addHelpSchema(docCmd.command("validate <docId>"), {
+	reads: "The change document and every specification listed under its Affected specs",
+	writes: "None; validation never modifies any file",
+	required: [{ name: "docId", type: "Change document ID", description: "Change document to validate" }],
+	optional: [{ name: "plain", type: "Boolean", description: "Accepted; output is always plain text" }],
+	output:
+		"Validation report listing every error with change-document line numbers; exit code 1 when the change has errors",
+	examples: ["backlog doc validate doc-3"],
+})
+	.description("validate a change document without modifying any file")
+	.option("--plain", "use plain text output (always plain)")
+	.action(inspectChangeDocument);
+
+addHelpSchema(docCmd.command("preview <docId>"), {
+	reads: "The change document and every specification listed under its Affected specs",
+	writes: "None; preview never modifies any file",
+	required: [{ name: "docId", type: "Change document ID", description: "Change document to preview" }],
+	optional: [{ name: "plain", type: "Boolean", description: "Accepted; output is always plain text" }],
+	output:
+		"Per-spec requirement diffs and the resulting specification text from the same validated projection; exit code 1 when the change has errors",
+	examples: ["backlog doc preview doc-3"],
+})
+	.description("preview the specifications a change would produce without modifying any file")
+	.option("--plain", "use plain text output (always plain)")
+	.action(inspectChangeDocument);
 
 addHelpSchema(docCmd.command("delete <docId>"), {
 	required: [{ name: "docId", type: "Document ID", description: "Document to delete" }],

@@ -13,6 +13,7 @@ import {
 import { type GitBranchTip, type GitIndexEntry, GitOperations } from "../git/operations.ts";
 import { parseFrontmatter } from "../markdown/frontmatter.ts";
 import { parseDecision, parseTask } from "../markdown/parser.ts";
+import { validateSpecificationContent } from "../markdown/spec-requirements.ts";
 import {
 	assertSectionInputHasNoMarkerLines,
 	assertValidChecklistMarks,
@@ -4035,6 +4036,9 @@ export class Core {
 		const subPath = normalizeDocumentSubPath(input.path);
 		const tags = normalizeStringList(input.tags);
 		const type = normalizeDocumentTypeInput(input.type) ?? "other";
+		if (type === "specification") {
+			validateSpecificationContent(input.content ?? "");
+		}
 		const document = await this.withCreateLock(async () => {
 			const id = normalizeDocumentId(await generateNextDocId(this));
 			const document: Document = {
@@ -4066,6 +4070,9 @@ export class Core {
 
 		const tags = input.tags !== undefined ? normalizeStringList(input.tags) : existingDoc.tags;
 		const type = normalizeDocumentTypeInput(input.type) ?? existingDoc.type;
+		if (type === "specification") {
+			validateSpecificationContent(input.content);
+		}
 		const subPath =
 			input.path === undefined
 				? getDocumentSubPathFromRelativePath(existingDoc.path)

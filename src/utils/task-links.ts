@@ -49,3 +49,41 @@ export function withoutVacatedTaskLinks(task: Task, vacatedTaskId: string): Task
 
 	return { ...task, dependencies: sanitizedDependencies, references: sanitizedReferences };
 }
+
+/**
+ * The task with every dependency, reference, and parent link naming `targetId` repointed to
+ * `replacementId`, or removed when it is `null`. Returns `null` when the task does not name the
+ * ID anywhere, so callers write only records that actually change.
+ *
+ * Unlike {@link withoutVacatedTaskLinks} this covers parent links: deleting a record must not
+ * leave a child whose `parent_task_id` rebinds to whatever record is allocated the ID next.
+ * The matchers are the deletion preview's, so the validated update set and the applied edit
+ * always describe the same references.
+ */
+export function repointTaskLinks(task: Task, targetId: string, replacementId: string | null): Task | null {
+	const dependencies = task.dependencies ?? [];
+	const references = task.references ?? [];
+	const parentTaskId = task.parentTaskId;
+
+	const updatedDependencies = replacementId
+		? dependencies.map((dependency) => (taskIdsEqual(dependency, targetId) ? replacementId : dependency))
+		: dependencies.filter((dependency) => !taskIdsEqual(dependency, targetId));
+	const updatedReferences = replacementId
+		? references.map((reference) => (isExactTaskReference(reference, targetId) ? replacementId : reference))
+		: references.filter((reference) => !isExactTaskReference(reference, targetId));
+	const parentMatches = parentTaskId !== undefined && taskIdsEqual(parentTaskId, targetId);
+	const updatedParent = parentMatches ? (replacementId ?? undefined) : parentTaskId;
+
+	const unchanged =
+		stringArraysEqual(dependencies, updatedDependencies) &&
+		stringArraysEqual(references, updatedReferences) &&
+		parentTaskId === updatedParent;
+	if (unchanged) return null;
+
+	return {
+		...task,
+		dependencies: updatedDependencies,
+		references: updatedReferences,
+		parentTaskId: updatedParent,
+	};
+}

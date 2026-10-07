@@ -86,7 +86,7 @@ import {
 	stringArraysEqual,
 	validateDependencies,
 } from "../utils/task-builders.ts";
-import { withoutVacatedTaskLinks } from "../utils/task-links.ts";
+import { repointTaskLinks, withoutVacatedTaskLinks } from "../utils/task-links.ts";
 import {
 	AmbiguousTaskIdError,
 	canonicalTaskId,
@@ -106,6 +106,16 @@ import { upsertTaskUpdatedDate } from "../utils/task-updated-date.ts";
 import { getTerminalStatus, isTerminalStatus } from "../utils/terminal-status.ts";
 import { migrateConfig, needsMigration } from "./config-migration.ts";
 import { ContentStore, type TaskCorpusSnapshot } from "./content-store.ts";
+import {
+	type DeletionPreview,
+	DeletionPreviewChangedError,
+	type DeletionResolution,
+	type DeletionScanTarget,
+	displayDeletionPath,
+	loadDeletionCorpus,
+	scanDeletionReferences,
+	validateDeletionResolutionForCorpus,
+} from "./deletion-preview.ts";
 import {
 	applyDuplicateTaskIdRepair,
 	type DuplicateRepairPlan,
@@ -239,7 +249,7 @@ const VACATED_ID_CLEANUP_LOCK_ATTEMPTS = 5;
  */
 function markRecordAlreadyMoved(
 	error: unknown,
-	state: "archiveState" | "demotionState",
+	state: "archiveState" | "demotionState" | "deletionState",
 	demotionFailureCause?: "cleanup" | "commit",
 ): Error {
 	const failure = error instanceof Error ? error : new Error(String(error));
@@ -257,6 +267,19 @@ function markRecordAlreadyMoved(
 export interface VacatedTaskResult {
 	success: boolean;
 	cleanedTaskIds: string[];
+}
+
+/** One record rewritten because it referenced the record an explicit delete removed. */
+export interface DeletionSourceUpdate {
+	id: string;
+	/** Project-relative file that was rewritten. */
+	path: string;
+}
+
+export interface DeletionExecutionResult {
+	/** Project-relative file that was removed. */
+	deletedPath: string;
+	updatedSources: DeletionSourceUpdate[];
 }
 
 interface TaskEditResult {
@@ -3722,6 +3745,239 @@ export class Core {
 
 			return moved !== null;
 		});
+	}
+
+	/**
+	 * Remove the file behind a deletion preview on explicit request, applying the validated
+	 * unlink/reassign choice to every record that references the target.
+	 *
+	 * The FORK-7 preview is an unlocked point-in-time read, so the mutation re-derives the reference
+	 * set inside the locks and refuses when it no longer matches the approved preview: applying the
+	 * approved resolution to a changed set would touch references nobody validated. Reference edits
+	 * run before the unlink, so a failure never leaves the target gone with its references
+	 * unapplied - the only state in which a reallocated ID could silently reidentify the record.
+	 */
+	async deleteEntity(
+		preview: DeletionPreview,
+		resolution: DeletionResolution,
+		autoCommit?: boolean,
+	): Promise<DeletionExecutionResult> {
+		if (preview.entityType === "document") {
+			throw new Error("Document deletion is not supported by this command.");
+		}
+		if (preview.status !== "found" || !preview.targetId) {
+			throw new Error("Delete requires a found deletion preview; run with --preview first.");
+		}
+		const label = preview.entityType === "task" ? "Task" : "Draft";
+		const targetId = preview.targetId;
+
+		// Resolve the target under the identity rules the preview used; ambiguity throws from the
+		// resolvers and never reaches the unlink.
+		let targetTask: Task | null = null;
+		let targetDraftPath: string | null = null;
+		if (preview.entityType === "task") {
+			targetTask = await this.loadTaskForMutation(targetId, { includeCrossBranch: false });
+			if (!targetTask) throw new Error(`${label} ${targetId} not found. Nothing was deleted.`);
+			if (!targetTask.filePath) {
+				throw new Error(`${label} ${targetId} has no readable file to remove. Nothing was deleted.`);
+			}
+		} else {
+			targetDraftPath = await this.fs.resolveDraftFilePath(targetId);
+			if (!targetDraftPath) throw new Error(`${label} ${targetId} not found. Nothing was deleted.`);
+		}
+		const targetDraftId = targetDraftPath ? extractDraftIdFromFilename(basename(targetDraftPath)) : null;
+		if (targetDraftPath && !targetDraftId) {
+			throw new Error(
+				`Draft file ${basename(targetDraftPath)} does not carry a draft ID in its filename. Nothing was deleted.`,
+			);
+		}
+		const targetFilePath = targetTask?.filePath ?? targetDraftPath;
+		if (!targetFilePath) throw new Error(`${label} ${targetId} has no readable file to remove. Nothing was deleted.`);
+
+		// The lock set is fixed from an unlocked pre-scan: the target plus every record the scan
+		// names. Sources without a readable file cannot be locked or rewritten, so they fail closed.
+		const scanTarget: DeletionScanTarget = { entityType: preview.entityType, id: targetTask?.id ?? targetId };
+		const preScanCorpus = await loadDeletionCorpus(this);
+		const preScan = scanDeletionReferences(preScanCorpus, scanTarget, this);
+		const sourceIds = new Set(preScan.map((reference) => reference.sourceId));
+		const sourceRecords = [...preScanCorpus.active, ...preScanCorpus.completed, ...preScanCorpus.drafts].filter(
+			(record) => sourceIds.has(record.id),
+		);
+		for (const source of sourceRecords) {
+			const isDraftSource = preScanCorpus.drafts.includes(source);
+			const lockable = source.filePath && (!isDraftSource || extractDraftIdFromFilename(basename(source.filePath)));
+			if (!lockable) {
+				throw new Error(
+					`${isDraftSource ? "Draft" : "Task"} ${source.id} references ${targetId} but has no readable file to update. Nothing was deleted.`,
+				);
+			}
+		}
+		const taskSources = sourceRecords.filter((record) => !preScanCorpus.drafts.includes(record));
+		const draftSources = sourceRecords
+			.filter((record) => preScanCorpus.drafts.includes(record))
+			.map((draft) => ({
+				filePath: draft.filePath as string,
+				canonicalId: extractDraftIdFromFilename(basename(draft.filePath as string)) as string,
+			}));
+
+		// Draft locks outermost, then the task locks sorted - the promote/demote order. Task locks
+		// sort through withTaskLocks, so concurrent deletes cannot deadlock each other; draft locks
+		// fail fast on contention instead.
+		const runUnderTaskLocks = async (): Promise<DeletionExecutionResult> => {
+			const taskLocks: Array<Pick<Task, "id" | "filePath">> = taskSources.map((record) => ({
+				id: record.id,
+				filePath: record.filePath as string,
+			}));
+			if (targetTask) taskLocks.push({ id: targetTask.id, filePath: targetTask.filePath as string });
+			return await this.fs.withTaskLocks(
+				taskLocks,
+				async () =>
+					await this.executeDeletionUnderLocks(
+						preview,
+						resolution,
+						scanTarget,
+						sourceRecords.map((record) => record.id),
+						targetFilePath,
+						autoCommit,
+					),
+			);
+		};
+		const draftLocks =
+			targetDraftPath && targetDraftId
+				? [{ filePath: targetDraftPath, canonicalId: targetDraftId }, ...draftSources]
+				: draftSources;
+		draftLocks.sort((left, right) => left.canonicalId.localeCompare(right.canonicalId));
+		const acquireDraftLocks = async (index: number): Promise<DeletionExecutionResult> => {
+			const lock = draftLocks[index];
+			if (!lock) return await runUnderTaskLocks();
+			return await this.fs.withDraftLock(lock, async () => await acquireDraftLocks(index + 1));
+		};
+		return await acquireDraftLocks(0);
+	}
+
+	/**
+	 * The mutation half of {@link deleteEntity}, running with the target and every source locked:
+	 * re-derive the corpus, compare it with the approved preview, apply the validated resolution to
+	 * the fresh source records, then unlink the target and commit.
+	 */
+	private async executeDeletionUnderLocks(
+		preview: DeletionPreview,
+		resolution: DeletionResolution,
+		scanTarget: DeletionScanTarget,
+		sourceIds: string[],
+		targetFilePath: string,
+		autoCommit?: boolean,
+	): Promise<DeletionExecutionResult> {
+		const label = preview.entityType === "task" ? "Task" : "Draft";
+		const targetId = preview.targetId ?? "";
+		const corpus = await loadDeletionCorpus(this);
+		const scanned = scanDeletionReferences(corpus, scanTarget, this);
+		const scannedKeys = scanned
+			.map((reference) => `${reference.sourceId}|${reference.relation}|${reference.value}`)
+			.sort();
+		const approvedKeys = preview.references
+			.map((reference) => `${reference.sourceId}|${reference.relation}|${reference.value}`)
+			.sort();
+		if (scannedKeys.length !== approvedKeys.length || scannedKeys.some((key, index) => key !== approvedKeys[index])) {
+			throw new DeletionPreviewChangedError(
+				`The references to ${targetId} changed since the preview was built. Nothing was deleted. Re-run with --preview to review the current references.`,
+			);
+		}
+
+		let replacementId: string | null = null;
+		if (scanned.length > 0) {
+			if (resolution.action === "cancel") {
+				throw new Error(
+					`Deletion of ${targetId} requires an unlink or reassign choice for its ${scanned.length} active reference(s). Nothing was deleted.`,
+				);
+			}
+			const validation = await validateDeletionResolutionForCorpus(corpus, preview, resolution);
+			if (!validation.ok) {
+				throw new Error(`${validation.errors.join(" ")} Nothing was deleted.`);
+			}
+			if (resolution.action === "reassign") {
+				replacementId = validation.updates[0]?.replacement ?? null;
+			}
+		}
+
+		// Re-pick the sources from the fresh corpus: a pre-lock edit must not be overwritten from
+		// the pre-scan snapshot.
+		const lockedIds = new Set(sourceIds);
+		const completedSources = new Set(corpus.completed);
+		const freshSources = [...corpus.active, ...corpus.completed, ...corpus.drafts]
+			.filter((record) => lockedIds.has(record.id))
+			.sort((left, right) => left.id.localeCompare(right.id));
+
+		// Reference edits run before the unlink: the unlink is the irreversible step, and a failure
+		// here must be recoverable without the target already gone.
+		const updatedSources: DeletionSourceUpdate[] = [];
+		const writtenAbsolutePaths: string[] = [];
+		const applyReferenceUpdates = async () => {
+			for (const record of freshSources) {
+				const updated = repointTaskLinks(record, scanTarget.id, replacementId);
+				if (!updated) continue;
+				const isDraftSource = corpus.drafts.includes(record);
+				let savedPath: string;
+				try {
+					savedPath = isDraftSource ? await this.fs.saveDraft(updated) : await this.fs.saveTask(updated);
+				} catch (error) {
+					const cause = error instanceof Error ? error.message : String(error);
+					throw new Error(`could not update ${record.id}: ${cause}`);
+				}
+				writtenAbsolutePaths.push(savedPath);
+				updatedSources.push({ id: record.id, path: displayDeletionPath(this, savedPath) });
+				const refreshed = { ...updated, filePath: savedPath };
+				if (isDraftSource) continue;
+				if (completedSources.has(record)) this.contentStore?.refreshCompletedTask(refreshed);
+				else this.contentStore?.upsertTask(refreshed);
+			}
+		};
+		try {
+			if (this.contentStore) await this.contentStore.batchTaskUpdates(applyReferenceUpdates);
+			else await applyReferenceUpdates();
+		} catch (error) {
+			const cause = error instanceof Error ? error.message : String(error);
+			const touched = updatedSources.map((source) => source.path).join(", ") || "none";
+			throw new Error(
+				`The target file was not deleted. Reference updates were applied to: ${touched}. ${cause} Re-run with --preview to review the references that remain.`,
+			);
+		}
+
+		try {
+			await unlink(targetFilePath);
+		} catch (error) {
+			const cause = error instanceof Error ? error.message : String(error);
+			const touched = updatedSources.map((source) => source.path).join(", ") || "none";
+			throw new Error(
+				`Reference updates were applied (${touched}), but the target file could not be removed: ${cause}. Re-run the delete to remove the file itself.`,
+			);
+		}
+		this.contentStore?.transitionTask(targetId);
+
+		// The file is gone from here on: a failure reports the delete as done instead of inviting a
+		// retry that would re-apply the resolution.
+		if (await this.shouldAutoCommit(autoCommit)) {
+			try {
+				await this.git.addFile(targetFilePath);
+				for (const writtenPath of writtenAbsolutePaths) {
+					await this.git.addFile(writtenPath);
+				}
+				await this.git.commitFiles(`backlog: Delete ${preview.entityType} ${targetId}`, [
+					targetFilePath,
+					...writtenAbsolutePaths,
+				]);
+			} catch (error) {
+				const cause = error instanceof Error ? error.message : String(error);
+				throw markRecordAlreadyMoved(
+					new Error(
+						`${label} ${targetId} was deleted (${displayDeletionPath(this, targetFilePath)}), but the Git commit failed: ${cause}. The file is removed on disk; Git recovery applies only to committed versions.`,
+					),
+					"deletionState",
+				);
+			}
+		}
+
+		return { deletedPath: displayDeletionPath(this, targetFilePath), updatedSources };
 	}
 
 	async demoteTask(taskId: string, autoCommit?: boolean, options: TaskReadOptions = {}): Promise<VacatedTaskResult> {

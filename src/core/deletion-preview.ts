@@ -106,6 +106,18 @@ interface DeletionCorpus {
 	documents: Document[];
 }
 
+/**
+ * Raised when the reference scan inside the mutation locks no longer matches the preview the
+ * requester approved. The destructive caller must abort: applying the approved resolution to a
+ * changed reference set would touch references nobody validated.
+ */
+export class DeletionPreviewChangedError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "DeletionPreviewChangedError";
+	}
+}
+
 interface ResolvedDeletionTarget {
 	entityType: DeletionEntityType;
 	id: string;
@@ -135,7 +147,8 @@ function isDocumentIdReference(entry: string): boolean {
 	return DOCUMENT_ID_REFERENCE_PATTERN.test(entry.trim());
 }
 
-function displayPath(core: Core, absolutePath: string): string {
+/** Project-relative rendering of a file a delete would remove or rewrite. */
+export function displayDeletionPath(core: Core, absolutePath: string): string {
 	if (!absolutePath) return "(unreadable location)";
 	return relative(core.fs.rootDir, absolutePath).split(sep).join("/");
 }
@@ -144,7 +157,16 @@ function documentAbsolutePath(core: Core, docsRelativePath: string): string {
 	return join(core.fs.docsDir, ...docsRelativePath.split("/"));
 }
 
-async function loadDeletionCorpus(core: Core): Promise<DeletionCorpus> {
+export interface DeletionScanTarget {
+	entityType: DeletionEntityType;
+	id: string;
+}
+
+/**
+ * Load every record that could reference a deletion target in any direction. The destructive
+ * consumers reload this inside their locks: the preview's corpus is an unlocked point-in-time read.
+ */
+export async function loadDeletionCorpus(core: Core): Promise<DeletionCorpus> {
 	const [active, completed, drafts, archived, documents] = await Promise.all([
 		core.fs.listTasks(),
 		core.fs.listCompletedTasks(),
@@ -203,9 +225,14 @@ async function resolveDeletionTarget(
 	}
 }
 
-function referencesToTarget(
+/**
+ * Every resolvable inbound structured reference to `target` in the given corpus. The preview and
+ * the destructive consumers share this one scan so the validated update set and the applied edit
+ * always describe the same references.
+ */
+export function scanDeletionReferences(
 	corpus: DeletionCorpus,
-	target: ResolvedDeletionTarget,
+	target: DeletionScanTarget,
 	core: Core,
 ): DeletionPreviewReference[] {
 	const references: DeletionPreviewReference[] = [];
@@ -214,7 +241,7 @@ function referencesToTarget(
 			relation,
 			sourceId: record.id,
 			sourceTitle: record.title,
-			sourcePath: displayPath(core, filePath ?? ""),
+			sourcePath: displayDeletionPath(core, filePath ?? ""),
 			value,
 		});
 	};
@@ -339,8 +366,8 @@ export async function buildDeletionPreview(
 		message: `${ENTITY_LABELS[entityType]} ${resolution.target.id} would be deleted.`,
 		targetId: resolution.target.id,
 		title: resolution.target.title,
-		targetPath: displayPath(core, resolution.target.path),
-		references: referencesToTarget(corpus, resolution.target, core),
+		targetPath: displayDeletionPath(core, resolution.target.path),
+		references: scanDeletionReferences(corpus, resolution.target, core),
 		unresolvedLinks: unresolvedLinksInTarget(corpus, resolution.target),
 	};
 }
@@ -511,9 +538,12 @@ function findParentCycle(corpus: DeletionCorpus, sourceId: string, replacementId
  * Validate a cancel/unlink/reassign choice against a preview and return the complete
  * reference-update set it would apply. A failed validation returns no updates at all: the
  * destructive consumers must never apply a partial set.
+ *
+ * The corpus-taking form is the one destructive consumers call inside their locks; the Core-taking
+ * form is a convenience for unlocked validation.
  */
-export async function validateDeletionResolution(
-	core: Core,
+export async function validateDeletionResolutionForCorpus(
+	corpus: DeletionCorpus,
 	preview: DeletionPreview,
 	resolution: DeletionResolution,
 ): Promise<DeletionResolutionValidation> {
@@ -550,7 +580,6 @@ export async function validateDeletionResolution(
 	if (!replacementId) {
 		return { ...empty, ok: false, errors: ["A replacement ID is required to reassign references."] };
 	}
-	const corpus = await loadDeletionCorpus(core);
 	const replacement = resolveReplacement(corpus, preview.entityType, replacementId);
 	if ("error" in replacement) {
 		return { ...empty, ok: false, errors: [replacement.error] };
@@ -574,6 +603,15 @@ export async function validateDeletionResolution(
 		}
 	}
 	return { ...empty, ok: true, updates: preview.references.map(toUpdate(replacement.id)) };
+}
+
+/** Unlocked validation over a freshly loaded corpus; see {@link validateDeletionResolutionForCorpus}. */
+export async function validateDeletionResolution(
+	core: Core,
+	preview: DeletionPreview,
+	resolution: DeletionResolution,
+): Promise<DeletionResolutionValidation> {
+	return await validateDeletionResolutionForCorpus(await loadDeletionCorpus(core), preview, resolution);
 }
 
 const RELATION_LABELS: Record<DeletionReferenceRelation, string> = {

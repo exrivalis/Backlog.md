@@ -1,11 +1,11 @@
 ---
 id: FORK-16
 title: Integrate approved deltas and preserve change history
-status: To Do
+status: Done
 assignee:
   - '@alex-agent'
 created_date: '2026-10-07 08:16'
-updated_date: '2026-10-07 08:42'
+updated_date: '2026-10-07 21:00'
 labels: []
 dependencies:
   - FORK-15
@@ -39,9 +39,9 @@ Apply a reviewed change and retry, test stale/partial failures, verify archived 
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Only a reviewed valid change can update the referenced current specs; task status alone never applies it.
-- [ ] #2 A second apply or stale baseline does not silently duplicate or overwrite requirements.
-- [ ] #3 The integrated change remains readable by its original ID after archive, and failures do not leave undocumented partial results.
+- [x] #1 Only a reviewed valid change can update the referenced current specs; task status alone never applies it.
+- [x] #2 A second apply or stale baseline does not silently duplicate or overwrite requirements.
+- [x] #3 The integrated change remains readable by its original ID after archive, and failures do not leave undocumented partial results.
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -52,3 +52,15 @@ Apply a reviewed change and retry, test stale/partial failures, verify archived 
 3. Record integrated state/history on the original change document to prevent repeat apply, then archive it without changing its document ID; preserve exact-ID lookup of integrated changes.
 4. Test approved and unreviewed attempts, stale baselines, retries, interrupted writes, multi-spec results and archived lookup in Git/no-Git fixtures; run targeted tests and static checks.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented the reviewed-change gate and apply/archive flow: managed Review/Integrated sections in src/markdown/change-document.ts (withManagedSection/readManagedSection shared with Baselines), Core.approveChangeDocument and Core.applyChangeDocument under the shared create lock with full rollback (spec writes, integration record, archive move), fs.moveDocumentToArchive into docs/changes/archive, and 'backlog doc approve'/'backlog doc apply' CLI commands with help schemas. Tests: 6 new unit tests, 9 new CLI tests covering unreviewed refusal with a Done linked task, happy path multi-spec apply + archive + exact-ID lookup, second-apply refusal, stale baseline, mid-apply write failure rollback, archive-collision rollback, no-Git fixture, auto-commit Git fixture, and target gates.
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Delivered the explicit reviewed-change gate and integration flow on top of FORK-14/15. 'backlog doc approve <docId> [--by]' records a managed Review section (the only approval signal; never inferred from task status). 'backlog doc apply <docId>' runs entirely under the shared create lock: it re-checks the gates, revalidates the change against current specs via the FORK-15 preview projection (stale baselines refuse), writes every affected spec from that projection, records the Integrated section, and archives the change into docs/changes/archive without changing its document ID, preserving exact-ID lookup. Any failed write (spec, integration record, or archive move) rolls every touched file back to its exact prior content and exits 1 with a diagnostic naming what was rolled back; rollback failures are reported explicitly instead of being hidden. Linked tasks are never marked Done. Verified with 'bun test --timeout=10000' over 5 files (73 pass / 0 fail; includes 6 new unit tests and 9 new CLI tests), 'bunx tsc --noEmit' clean, and 'bunx biome check' clean on all changed files. Deviations recorded in notes: approve command shape, rollback also covers mark/archive writes, and the no-Git fixture runs under the OS temp dir because a repo-nested fixture would lock the surrounding repository.
+<!-- SECTION:FINAL_SUMMARY:END -->

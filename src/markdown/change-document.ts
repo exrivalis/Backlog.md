@@ -68,6 +68,25 @@
  * written. Old specifications stay valid: a change without recorded baselines only
  * skips the staleness check.
  *
+ * Integration is explicit and two-gated. `backlog doc approve` records the human
+ * review decision in a managed section the CLI owns:
+ *
+ *   ## Review
+ *
+ *   Approved by @alex on 2026-10-07 09:00.
+ *
+ * Approval is never inferred from anything else — a linked task being Done does not
+ * approve a change. `backlog doc apply` then revalidates the whole change against the
+ * current specifications (a stale baseline refuses), writes every affected spec from
+ * the same validated projection, and records the outcome in a final managed section:
+ *
+ *   ## Integrated
+ *
+ *   Integrated on 2026-10-07 09:05 into doc-12, doc-13.
+ *
+ * The integrated change keeps its document ID and moves to docs/changes/archive as
+ * history; the Integrated section is what refuses a second apply.
+ *
  * The change only records the proposal — current specifications and linked tasks stay
  * the source of truth, so a change never duplicates task plans or statuses and never
  * edits a spec on its own.
@@ -236,11 +255,16 @@ function trimTrailingBlankLines(lines: string[]): string[] {
 	return trimmed;
 }
 
+function managedSectionTitle(line: string): string {
+	return (line.match(SECTION_HEADING)?.[1] ?? "").trim().toLowerCase();
+}
+
 /**
- * Rewrites the managed Baselines section: strips any existing one, then records one
- * entry per given specification, ordered by spec ID. An empty map only strips.
+ * Rewrites one managed `##` section the CLI owns: strips any existing section with
+ * that title, then appends the given body at the end of the document. An empty body
+ * only strips. Titles match case-insensitively, mirroring resolveSectionKey.
  */
-export function withRecordedBaselines(content: string, baselines: Map<string, string>): string {
+export function withManagedSection(content: string, title: string, body: string[]): string {
 	const lines = content.replace(/\r\n/g, "\n").split("\n");
 	const kept: string[] = [];
 	let skipping = false;
@@ -252,21 +276,94 @@ export function withRecordedBaselines(content: string, baselines: Map<string, st
 				continue;
 			}
 		}
-		const heading = line.match(SECTION_HEADING);
-		if (heading && resolveSectionKey(heading[1] ?? "") === "baselines") {
+		if (!skipping && managedSectionTitle(line) === title.toLowerCase()) {
 			skipping = true;
 			continue;
 		}
 		kept.push(line);
 	}
-	const body = trimTrailingBlankLines(kept).join("\n");
-	if (baselines.size === 0) {
-		return body ? `${body}\n` : content;
+	const keptBody = trimTrailingBlankLines(kept).join("\n");
+	if (body.length === 0) {
+		return keptBody ? `${keptBody}\n` : content;
 	}
+	return `${keptBody ? `${keptBody}\n\n` : ""}## ${title}\n\n${body.join("\n")}\n`;
+}
+
+/** Returns the body lines of one `##` section, or null when the section is absent. */
+export function readManagedSection(content: string, title: string): string[] | null {
+	const lines = content.replace(/\r\n/g, "\n").split("\n");
+	const wanted = title.toLowerCase();
+	const body: string[] = [];
+	let found = false;
+	for (const line of lines) {
+		if (SECTION_HEADING.test(line)) {
+			if (found) break;
+			found = managedSectionTitle(line) === wanted;
+			continue;
+		}
+		if (found) body.push(line);
+	}
+	return found ? body : null;
+}
+
+/**
+ * Rewrites the managed Baselines section: strips any existing one, then records one
+ * entry per given specification, ordered by spec ID. An empty map only strips.
+ */
+export function withRecordedBaselines(content: string, baselines: Map<string, string>): string {
 	const entries = [...baselines.entries()]
 		.sort(([left], [right]) => left.toLowerCase().localeCompare(right.toLowerCase()))
 		.map(([specId, hash]) => `- ${specId}: ${hash}`);
-	return `${body ? `${body}\n\n` : ""}## Baselines\n\n${entries.join("\n")}\n`;
+	return withManagedSection(content, "Baselines", entries);
+}
+
+/** The explicit review record `backlog doc approve` writes; nothing else counts as approval. */
+export interface ChangeReview {
+	approved: boolean;
+	approvedBy?: string;
+	approvedDate?: string;
+}
+
+const APPROVAL_LINE = /^Approved(?: by (.+?))? on (.+?)\.?$/;
+
+export function parseChangeReview(content: string): ChangeReview {
+	const body = readManagedSection(content, "Review");
+	if (!body) return { approved: false };
+	for (const line of trimTrailingBlankLines(body)) {
+		const match = line.trim().match(APPROVAL_LINE);
+		if (match) {
+			return { approved: true, ...(match[1] && { approvedBy: match[1] }), approvedDate: match[2] };
+		}
+	}
+	return { approved: false };
+}
+
+/** The integration record `backlog doc apply` writes; its presence blocks a repeat apply. */
+export interface ChangeIntegration {
+	integrated: boolean;
+	integratedDate?: string;
+	specIds: string[];
+}
+
+const INTEGRATED_LINE = /^Integrated on (.+?) into (.+?)\.?$/;
+
+export function parseChangeIntegration(content: string): ChangeIntegration {
+	const body = readManagedSection(content, "Integrated");
+	if (!body) return { integrated: false, specIds: [] };
+	for (const line of trimTrailingBlankLines(body)) {
+		const match = line.trim().match(INTEGRATED_LINE);
+		if (match?.[2]) {
+			return {
+				integrated: true,
+				integratedDate: match[1],
+				specIds: match[2]
+					.split(",")
+					.map((specId) => specId.trim())
+					.filter(Boolean),
+			};
+		}
+	}
+	return { integrated: false, specIds: [] };
 }
 
 /** Resolves the structured links a change document references. */

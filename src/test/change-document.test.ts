@@ -3,8 +3,12 @@ import {
 	buildChangeDocumentPreview,
 	type ChangeLinkResolver,
 	parseChangeDocument,
+	parseChangeIntegration,
+	parseChangeReview,
+	readManagedSection,
 	specBaselineHash,
 	validateChangeContent,
+	withManagedSection,
 	withRecordedBaselines,
 } from "../markdown/change-document.ts";
 import type { Document } from "../types/index.ts";
@@ -213,6 +217,67 @@ describe("specification baselines", () => {
 		const stripped = withRecordedBaselines(recorded, new Map());
 		expect(stripped).not.toContain("## Baselines");
 		expect(parseChangeDocument(stripped).baselines).toEqual([]);
+	});
+});
+
+describe("managed sections for review and integration", () => {
+	it("appends a new managed section at the end without touching the rest", () => {
+		const withReview = withManagedSection(SINGLE_SPEC_CHANGE, "Review", ["Approved by @alex on 2026-10-07 09:00."]);
+		expect(withReview.startsWith(SINGLE_SPEC_CHANGE.trimEnd())).toBe(true);
+		expect(withReview).toContain("\n## Review\n\nApproved by @alex on 2026-10-07 09:00.\n");
+		expect(readManagedSection(withReview, "Review")).toEqual(["", "Approved by @alex on 2026-10-07 09:00.", ""]);
+		expect(readManagedSection(withReview, "Integrated")).toBeNull();
+	});
+
+	it("replaces one managed section without disturbing another", () => {
+		const withReview = withManagedSection(SINGLE_SPEC_CHANGE, "Review", ["Approved on 2026-10-07 09:00."]);
+		const withBoth = withManagedSection(withReview, "Integrated", ["Integrated on 2026-10-07 09:05 into doc-12."]);
+		const reApproved = withManagedSection(withBoth, "Review", ["Approved by @alex on 2026-10-07 09:30."]);
+
+		expect(readManagedSection(reApproved, "Review")).toEqual(["", "Approved by @alex on 2026-10-07 09:30.", ""]);
+		expect(readManagedSection(reApproved, "Integrated")).toEqual([
+			"",
+			"Integrated on 2026-10-07 09:05 into doc-12.",
+			"",
+		]);
+		expect(reApproved.match(/## Review/g)).toHaveLength(1);
+	});
+
+	it("strips a managed section when the body is empty", () => {
+		const withReview = withManagedSection(SINGLE_SPEC_CHANGE, "Review", ["Approved on 2026-10-07 09:00."]);
+		const stripped = withManagedSection(withReview, "Review", []);
+		expect(stripped).not.toContain("## Review");
+		expect(readManagedSection(stripped, "Review")).toBeNull();
+	});
+
+	it("reads the explicit review record and nothing else as approval", () => {
+		expect(parseChangeReview(SINGLE_SPEC_CHANGE)).toEqual({ approved: false });
+
+		const approved = withManagedSection(SINGLE_SPEC_CHANGE, "Review", ["Approved by @alex on 2026-10-07 09:00."]);
+		expect(parseChangeReview(approved)).toEqual({
+			approved: true,
+			approvedBy: "@alex",
+			approvedDate: "2026-10-07 09:00",
+		});
+
+		const anonymous = withManagedSection(SINGLE_SPEC_CHANGE, "Review", ["Approved on 2026-10-07 09:00."]);
+		expect(parseChangeReview(anonymous)).toEqual({ approved: true, approvedDate: "2026-10-07 09:00" });
+
+		// A Review section without an approval line does not approve anything.
+		expect(parseChangeReview("## Review\n\nMaybe later.\n").approved).toBe(false);
+	});
+
+	it("reads the integration record that blocks a repeat apply", () => {
+		expect(parseChangeIntegration(SINGLE_SPEC_CHANGE)).toEqual({ integrated: false, specIds: [] });
+
+		const integrated = withManagedSection(SINGLE_SPEC_CHANGE, "Integrated", [
+			"Integrated on 2026-10-07 09:05 into doc-12, doc-13.",
+		]);
+		expect(parseChangeIntegration(integrated)).toEqual({
+			integrated: true,
+			integratedDate: "2026-10-07 09:05",
+			specIds: ["doc-12", "doc-13"],
+		});
 	});
 });
 

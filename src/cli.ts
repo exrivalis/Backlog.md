@@ -5317,6 +5317,74 @@ addHelpSchema(docCmd.command("preview <docId>"), {
 	.option("--plain", "use plain text output (always plain)")
 	.action(inspectChangeDocument);
 
+addHelpSchema(docCmd.command("approve <docId>"), {
+	reads: "The change document",
+	writes: "Records the approval marker in the change document's managed Review section",
+	required: [{ name: "docId", type: "Change document ID", description: "Change document to approve" }],
+	optional: [
+		{ name: "by", type: "String", description: "Who reviewed the change" },
+		{ name: "plain", type: "Boolean", description: "Accepted; output is always plain text" },
+	],
+	output: "Approved change ID and path; exit code 1 when the target is not an unapproved change document",
+	warnings: [
+		"Approval is an explicit human decision. A linked task's status is never treated as approval, and only 'backlog doc apply' checks this marker.",
+	],
+	examples: ["backlog doc approve doc-3 --by @alex"],
+})
+	.description("record the explicit review approval a change needs before it can be applied")
+	.option("--by <reviewer>", "record who reviewed the change")
+	// Accepted so agent guidance that always passes --plain works; approve output is already plain text.
+	.option("--plain", "use plain text output (always plain)")
+	.action(async (docId: string, options: { by?: string; plain?: boolean }) => {
+		const cwd = await requireProjectRoot();
+		const core = new Core(cwd);
+		try {
+			const document = await core.approveChangeDocument(docId, { by: options.by });
+			console.log(`Approved change ${document.id}`);
+			if (document.path) {
+				console.log(`Path: ${core.filesystem.backlogDirName}/docs/${document.path}`);
+			}
+		} catch (error) {
+			console.error(error instanceof Error ? error.message : String(error));
+			process.exitCode = 1;
+		}
+	});
+
+addHelpSchema(docCmd.command("apply <docId>"), {
+	reads: "The change document and every specification listed under its Affected specs",
+	writes:
+		"Updates every affected specification from the validated projection, records the Integrated section, and moves the change to docs/changes/archive under its own ID",
+	required: [{ name: "docId", type: "Change document ID", description: "Reviewed change document to apply" }],
+	optional: [{ name: "plain", type: "Boolean", description: "Accepted; output is always plain text" }],
+	output:
+		"Per-spec update report and the archived history path; exit code 1 when the change is unapproved, already integrated, or invalid (including stale baselines)",
+	warnings: [
+		"Apply requires an explicit 'backlog doc approve' record and revalidates every affected spec immediately before writing; a second apply or a stale baseline is refused.",
+	],
+	examples: ["backlog doc apply doc-3"],
+})
+	.description("integrate a reviewed change into its current specs and archive it as history")
+	// Accepted so agent guidance that always passes --plain works; apply output is already plain text.
+	.option("--plain", "use plain text output (always plain)")
+	.action(async (docId: string) => {
+		const cwd = await requireProjectRoot();
+		const core = new Core(cwd);
+		try {
+			const result = await core.applyChangeDocument(docId);
+			console.log(`Applied change ${result.changeId}:`);
+			for (const spec of result.specs) {
+				console.log(
+					`- ${spec.updated ? "updated" : "unchanged"} ${spec.specId} (${core.filesystem.backlogDirName}/docs/${spec.path})`,
+				);
+			}
+			const archivedRelativeToDocs = result.archivedPath.split(/[/\\]/).slice(-3).join("/");
+			console.log(`Archived as history: ${core.filesystem.backlogDirName}/docs/${archivedRelativeToDocs}`);
+		} catch (error) {
+			console.error(error instanceof Error ? error.message : String(error));
+			process.exitCode = 1;
+		}
+	});
+
 addHelpSchema(docCmd.command("delete <docId>"), {
 	required: [{ name: "docId", type: "Document ID", description: "Document to delete" }],
 	optional: [

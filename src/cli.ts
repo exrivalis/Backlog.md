@@ -5068,7 +5068,7 @@ addHelpSchema(docCmd.command("create <title>"), {
 	],
 	writes: "Creates a document markdown file under the configured docs directory",
 	output: "Created document ID and path",
-	examples: ['backlog doc create "API Guidelines" -p guides/api'],
+	examples: ['backlog doc create "API Guidelines" -p guides/api', 'backlog doc create "Warn before expiry" -t change'],
 })
 	.option("-p, --path <path>")
 	.option("-t, --type <type>", `document type (${DOCUMENT_TYPE_VALUES.join(", ")})`)

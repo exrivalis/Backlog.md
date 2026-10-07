@@ -114,7 +114,7 @@ describe("MCP document tools", () => {
 
 		expect(invalidCreate.isError).toBe(true);
 		expect(getText(invalidCreate.content)).toContain(
-			"Field 'type' must be one of: readme, guide, specification, other",
+			"Field 'type' must be one of: readme, guide, specification, change, other",
 		);
 
 		await mcpServer.testInterface.callTool({
@@ -141,7 +141,7 @@ describe("MCP document tools", () => {
 
 		expect(invalidUpdate.isError).toBe(true);
 		expect(getText(invalidUpdate.content)).toContain(
-			"Field 'type' must be one of: readme, guide, specification, other",
+			"Field 'type' must be one of: readme, guide, specification, change, other",
 		);
 	});
 

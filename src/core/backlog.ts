@@ -11,6 +11,7 @@ import {
 	newTaskLockError,
 } from "../file-system/operations.ts";
 import { type GitBranchTip, type GitIndexEntry, GitOperations } from "../git/operations.ts";
+import { type ChangeLinkResolver, validateChangeContent } from "../markdown/change-document.ts";
 import { parseDecision, parseTask } from "../markdown/parser.ts";
 import { validateSpecificationContent } from "../markdown/spec-requirements.ts";
 import {
@@ -4434,18 +4435,33 @@ export class Core {
 		return await this.createDocumentFromInput({ title, content }, autoCommit);
 	}
 
+	/**
+	 * Resolves the structured links a change document references. Lookups reuse the canonical
+	 * task, document, and decision resolvers, so ambiguous IDs fail closed with their own error.
+	 */
+	private changeLinkResolver(): ChangeLinkResolver {
+		return {
+			getDocument: (id) => this.getDocument(id),
+			hasTask: async (id) => (await this.getTask(id)) !== null,
+			hasDecision: async (id) => (await this.fs.loadDecision(id)) !== null,
+		};
+	}
+
 	async createDocumentFromInput(input: DocumentCreateInput, autoCommit?: boolean): Promise<Document> {
 		const title = input.title.trim();
 		if (!title) {
 			throw new Error("Title is required to create a document.");
 		}
 
-		const subPath = normalizeDocumentSubPath(input.path);
 		const tags = normalizeStringList(input.tags);
 		const type = normalizeDocumentTypeInput(input.type) ?? "other";
 		if (type === "specification") {
 			validateSpecificationContent(input.content ?? "");
+		} else if (type === "change") {
+			await validateChangeContent(input.content ?? "", this.changeLinkResolver());
 		}
+		// doc-4 layout: change records live under docs/changes unless a path is given.
+		const subPath = normalizeDocumentSubPath(input.path ?? (type === "change" ? "changes" : undefined));
 		const document = await this.withCreateLock(async () => {
 			const id = normalizeDocumentId(await generateNextDocId(this));
 			const document: Document = {
@@ -4479,6 +4495,8 @@ export class Core {
 		const type = normalizeDocumentTypeInput(input.type) ?? existingDoc.type;
 		if (type === "specification") {
 			validateSpecificationContent(input.content);
+		} else if (type === "change") {
+			await validateChangeContent(input.content ?? "", this.changeLinkResolver());
 		}
 		const subPath =
 			input.path === undefined

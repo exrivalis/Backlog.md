@@ -50,6 +50,7 @@ import {
 import { openMultiSelectFilterPopup, openSingleSelectFilterPopup } from "./components/filter-popup.ts";
 import { type BoundaryNavigationKey, createGenericList, type GenericList } from "./components/generic-list.ts";
 import { openHelpPopup } from "./components/help-popup.ts";
+import { deletionEntityTypeForTask, runTuiDeletion } from "./deletion.ts";
 import { formatFooterContent, getTaskListFooterContent } from "./footer-content.ts";
 import { formatHeading } from "./heading.ts";
 import { createLoadingScreen } from "./loading.ts";
@@ -1399,6 +1400,35 @@ export async function viewTaskEnhanced(
 		}
 	};
 
+	// The explicit delete counterpart of the archive/complete shortcuts. The draft-status
+	// convention decides whether the Core delete targets a draft or a task file, so this one
+	// binding serves the task list and the drafts view alike.
+	const applyTaskDeletionShortcut = async (task: Task) => {
+		if (task.branch) {
+			showTransientHelp(` {red-fg}Cannot delete task from branch "${task.branch}".{/}`);
+			return;
+		}
+		const focusBefore = currentFocus;
+		const outcome = await runWithModalGuard(() =>
+			runTuiDeletion({
+				screen,
+				core,
+				entityType: deletionEntityTypeForTask(task),
+				entityId: task.id,
+				onDone: () => {
+					if (focusBefore === "detail" && descriptionBox) focusDetailPane();
+					else focusTaskList();
+				},
+			}),
+		);
+		if (outcome.status === "deleted") {
+			removeTaskFromCurrentView(task.id);
+			showTransientHelp(` {green-fg}${outcome.message}{/}`);
+		} else if (outcome.status === "error") {
+			showTransientHelp(` {red-fg}${outcome.message}{/}`);
+		}
+	};
+
 	// Handle resize
 	screen.on("resize", () => {
 		filterHeader.rebuild();
@@ -1482,6 +1512,13 @@ export async function viewTaskEnhanced(
 		const task = getCurrentShortcutTask();
 		if (!task) return;
 		await applyTaskLifecycleShortcut(task, "archive");
+	});
+
+	screen.key(["d", "D"], async () => {
+		if (modalOpen || filterPopupOpen || currentFocus === "filters") return;
+		const task = getCurrentShortcutTask();
+		if (!task) return;
+		await applyTaskDeletionShortcut(task);
 	});
 
 	screen.key(["?"], async () => {

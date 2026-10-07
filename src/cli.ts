@@ -80,6 +80,7 @@ import {
 import type { TaskEditArgs } from "./types/task-edit-args.ts";
 import { formatAcceptanceCriteriaSummarySuffix } from "./ui/acceptance-criteria-progress.ts";
 import { genericSelectList } from "./ui/components/generic-list.ts";
+import { documentDeleteViewerAction } from "./ui/deletion.ts";
 import { createLoadingScreen } from "./ui/loading.ts";
 import { viewTaskEnhanced } from "./ui/task-viewer-with-search.ts";
 import { scrollableViewer } from "./ui/tui.ts";
@@ -5170,7 +5171,7 @@ addListWindowOptions(docListCommand)
 			// older title-only filenames, or in a subdirectory, opened as nothing.
 			const content = await core.getDocumentContent(selected.id);
 			if (content !== null) {
-				await scrollableViewer(content);
+				await scrollableViewer(content, { action: documentDeleteViewerAction(core, selected.id) });
 			}
 		}
 	});
@@ -5263,7 +5264,7 @@ addHelpSchema(docCmd.command("view <docId>"), {
 				console.log(content);
 				return;
 			}
-			await scrollableViewer(content);
+			await scrollableViewer(content, { action: documentDeleteViewerAction(core, docId) });
 		} catch (error) {
 			if (isAmbiguousIdError(error)) {
 				console.error(error.message);

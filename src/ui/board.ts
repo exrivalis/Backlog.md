@@ -29,6 +29,7 @@ import { openMultiSelectFilterPopup, openSingleSelectFilterPopup } from "./compo
 import type { BoundaryNavigationKey } from "./components/generic-list.ts";
 import { openHelpPopup } from "./components/help-popup.ts";
 import { openTaskComposer, type TaskComposerOptions } from "./components/task-composer.ts";
+import { runTuiDeletion } from "./deletion.ts";
 import { formatFooterContent, getBoardFooterContent } from "./footer-content.ts";
 import { formatProjectBadge } from "./project.ts";
 import { getStatusIcon } from "./status-icon.ts";
@@ -1518,6 +1519,36 @@ export async function renderBoardTui(
 			}
 		};
 
+		/**
+		 * The explicit delete flow for one board task: shared preview/confirm dialogs, then the
+		 * same Core delete the CLI runs. Archive stays the default lifecycle action; this only
+		 * runs on an explicit D.
+		 */
+		const deleteTaskFromBoard = async (task: Task, restoreFocus: () => void): Promise<void> => {
+			if (task.branch) {
+				showTransientFooter(` {red-fg}Cannot delete task from branch "${task.branch}".{/}`);
+				return;
+			}
+			const core = await getCore();
+			const outcome = await runWithModalGuard(() =>
+				runTuiDeletion({
+					screen,
+					core,
+					entityType: "task",
+					entityId: task.id,
+					onDone: restoreFocus,
+				}),
+			);
+			if (outcome.status === "deleted") {
+				currentTasks = currentTasks.filter((t) => t.id !== task.id);
+				closeOpenPopup();
+				renderView();
+				showTransientFooter(` {green-fg}${outcome.message}{/}`);
+			} else if (outcome.status === "error") {
+				showTransientFooter(` {red-fg}${outcome.message}{/}`);
+			}
+		};
+
 		const openTaskPopup = async (task: Task): Promise<void> => {
 			popupOpen = true;
 
@@ -1590,6 +1621,17 @@ export async function renderBoardTui(
 						);
 					}
 				}
+			});
+
+			contentArea.key(["d", "D"], async () => {
+				await deleteTaskFromBoard(task, () => {
+					if (openPopup?.taskId === task.id) {
+						contentArea.focus();
+						screen.render();
+					} else {
+						restoreColumnFocus(currentCol);
+					}
+				});
 			});
 
 			contentArea.key(["a", "A"], async () => {
@@ -2097,6 +2139,16 @@ export async function renderBoardTui(
 					);
 				}
 			}
+		});
+
+		screen.key(["d", "D"], async () => {
+			if (popupOpen || filterPopupOpen || modalOpen || currentFocus === "filters" || moveOp) return;
+			const column = columns[currentCol];
+			if (!column) return;
+			const idx = column.list.selected ?? 0;
+			const task = column.tasks[idx];
+			if (!task) return;
+			await deleteTaskFromBoard(task, () => restoreColumnFocus(currentCol));
 		});
 
 		screen.key(["a", "A"], async () => {

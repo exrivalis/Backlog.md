@@ -1,5 +1,6 @@
 import { isAbsolute, join, relative } from "node:path";
 import type { TaskDetail, TaskListItem } from "../core/task-detail.ts";
+import { CommentsManager } from "../markdown/structured-sections.ts";
 import type {
 	Decision,
 	DecisionSearchResult,
@@ -46,11 +47,22 @@ type ChecklistItemJson = {
 	checked: boolean;
 };
 
+type TaskCommentHistoryJson = {
+	action: "edited" | "redacted";
+	date: string | null;
+	editor: string | null;
+	/** The body this correction replaced; null for redactions, which retain no body. */
+	body: string | null;
+};
+
 type TaskCommentJson = {
 	index: number;
 	body: string;
 	createdAt: string | null;
 	author: string | null;
+	/** Correction target handle for --edit-comment / --redact-comment. */
+	fingerprint: string;
+	history: TaskCommentHistoryJson[];
 };
 
 /** The normalized dependency context: an explicit root, every reached node, and directed edges. */
@@ -190,6 +202,13 @@ function toTaskDetailsJson(task: TaskDetail, projectRoot: string): TaskDetailsJs
 				body: comment.body,
 				createdAt: normalizePublicDate(comment.createdDate),
 				author: nullable(comment.author),
+				fingerprint: CommentsManager.fingerprint(comment),
+				history: (comment.history ?? []).map((entry) => ({
+					action: entry.action,
+					date: normalizePublicDate(entry.date),
+					editor: nullable(entry.editor),
+					body: nullable(entry.body),
+				})),
 			})),
 		finalSummary: nullable(task.finalSummary),
 	};

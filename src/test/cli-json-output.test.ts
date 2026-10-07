@@ -192,14 +192,15 @@ describe("CLI JSON output", () => {
 			expect(output.task.acceptanceCriteriaCount).toBe(1);
 			expect(output.task.acceptanceCriteria).toEqual([{ index: 1, text: "Produces JSON", checked: true }]);
 			expect(output.task.definitionOfDone).toEqual([{ index: 1, text: "Tests pass", checked: false }]);
-			expect(output.task.comments).toEqual([
-				{
-					index: 1,
-					body: "Keep this stable",
-					createdAt: "2026-07-14T11:00:00Z",
-					author: "@alex",
-				},
-			]);
+			const [firstComment] = output.task.comments;
+			expect(firstComment).toMatchObject({
+				index: 1,
+				body: "Keep this stable",
+				createdAt: "2026-07-14T11:00:00Z",
+				author: "@alex",
+				history: [],
+			});
+			expect(firstComment.fingerprint).toMatch(/^[0-9a-f]{8}$/);
 			expect(output.task.subtasks).toEqual([]);
 			expect(output.task.finalSummary).toBe("Ready for review");
 			expect(output.task.dueDate).toBe("2026-08-10");

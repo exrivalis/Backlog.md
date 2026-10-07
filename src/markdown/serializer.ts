@@ -1,4 +1,4 @@
-import type { AcceptanceCriterion, Decision, Document, Task } from "../types/index.ts";
+import type { AcceptanceCriterion, Decision, Document, Task, TaskComment } from "../types/index.ts";
 import { normalizeAssignee } from "../utils/assignee.ts";
 import { stringifyFrontmatter } from "./frontmatter.ts";
 import {
@@ -31,6 +31,10 @@ function checklistItemsEqual(left: AcceptanceCriterion[], right: AcceptanceCrite
 	});
 }
 
+function commentHistoryEqual(left: TaskComment["history"], right: TaskComment["history"]): boolean {
+	return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+}
+
 function commentItemsEqual(left: Task["comments"], right: Task["comments"]): boolean {
 	const leftComments = left ?? [];
 	const rightComments = right ?? [];
@@ -41,7 +45,8 @@ function commentItemsEqual(left: Task["comments"], right: Task["comments"]): boo
 			other?.index === item.index &&
 			other.body === item.body &&
 			other.createdDate === item.createdDate &&
-			other.author === item.author
+			other.author === item.author &&
+			commentHistoryEqual(other?.history, item.history)
 		);
 	});
 }

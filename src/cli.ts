@@ -36,7 +36,7 @@ import {
 	taskListJson,
 	taskViewJson,
 } from "./formatters/json-output.ts";
-import { formatTaskPlainText } from "./formatters/task-plain-text.ts";
+import { formatCommentHistory, formatTaskPlainText } from "./formatters/task-plain-text.ts";
 import {
 	type AgentInstructionFile,
 	addAgentInstructions,
@@ -604,6 +604,10 @@ function hasEditFieldFlags(options: Record<string, unknown>): boolean {
 			options.notes !== undefined ||
 			options.comment !== undefined ||
 			options.commentAuthor !== undefined ||
+			options.editComment !== undefined ||
+			options.redactComment !== undefined ||
+			options.commentText !== undefined ||
+			options.commentEditor !== undefined ||
 			options.finalSummary !== undefined ||
 			options.appendPlan !== undefined ||
 			options.appendNotes !== undefined ||
@@ -640,6 +644,10 @@ const PER_TASK_ONLY_EDIT_FLAGS: ReadonlyArray<{ option: string; flag: string }> 
 	{ option: "clearFinalSummary", flag: "--clear-final-summary" },
 	{ option: "comment", flag: "--comment" },
 	{ option: "commentAuthor", flag: "--comment-author" },
+	{ option: "editComment", flag: "--edit-comment" },
+	{ option: "redactComment", flag: "--redact-comment" },
+	{ option: "commentText", flag: "--comment-text" },
+	{ option: "commentEditor", flag: "--comment-editor" },
 	{ option: "ordinal", flag: "--ordinal" },
 	{ option: "modifiedFile", flag: "--modified-file" },
 	{ option: "removeAc", flag: "--remove-ac" },
@@ -3493,6 +3501,18 @@ async function runEditCommand(target: EditCommandTarget, requestedIds: string[] 
 	if (typeof options.commentAuthor === "string") {
 		editArgs.commentAuthor = String(options.commentAuthor);
 	}
+	if (typeof options.editComment === "string") {
+		editArgs.editComment = String(options.editComment);
+	}
+	if (typeof options.redactComment === "string") {
+		editArgs.redactComment = String(options.redactComment);
+	}
+	if (typeof options.commentText === "string") {
+		editArgs.commentText = String(options.commentText);
+	}
+	if (typeof options.commentEditor === "string") {
+		editArgs.commentEditor = String(options.commentEditor);
+	}
 	if (typeof options.finalSummary === "string") {
 		editArgs.finalSummary = String(options.finalSummary);
 	}
@@ -3653,6 +3673,16 @@ function addEditFieldOptions(cmd: Command) {
 			createMultiValueAccumulator(),
 		)
 		.option("--comment-author <author>", "author to record for appended comments")
+		.option(
+			"--edit-comment <target>",
+			"correct one comment targeted as '#<index>@<fingerprint>' or '<fingerprint>' as shown by the view output",
+		)
+		.option("--comment-text <text>", "replacement body for --edit-comment")
+		.option(
+			"--redact-comment <target>",
+			"redact one comment targeted as '#<index>@<fingerprint>' or '<fingerprint>' as shown by the view output",
+		)
+		.option("--comment-editor <name>", "name recorded for --edit-comment and --redact-comment")
 		.option("--final-summary <text>", "set final summary (replaces existing)")
 		.option(
 			"--append-plan <text>",
@@ -3798,6 +3828,18 @@ const taskEditCommand = addHelpSchema(taskCmd.command("edit [taskIds...]"), {
 		{ name: "notes", type: "Markdown", description: "Replacement implementation notes" },
 		{ name: "append-notes", type: "Markdown", description: "Append to implementation notes; repeatable" },
 		{ name: "comment", type: "Markdown", description: "Append a discussion comment" },
+		{
+			name: "edit-comment",
+			type: "Comment target",
+			description: "Correct one comment targeted as '#<index>@<fingerprint>' or '<fingerprint>' from the view output",
+		},
+		{ name: "comment-text", type: "Markdown", description: "Replacement body for --edit-comment" },
+		{
+			name: "redact-comment",
+			type: "Comment target",
+			description: "Redact one comment targeted as '#<index>@<fingerprint>' or '<fingerprint>' from the view output",
+		},
+		{ name: "comment-editor", type: "String", description: "Name recorded for --edit-comment and --redact-comment" },
 		{ name: "final-summary", type: "Markdown", description: "Completion summary" },
 		{ name: "append-final-summary", type: "Markdown", description: "Append to final summary; repeatable" },
 		{ name: "check-ac", type: "Integer", description: "1-based acceptance criterion index" },
@@ -3823,6 +3865,12 @@ addHelpSchema(taskCmd.command("view <taskId>"), {
 	optional: [
 		{ name: "plain", type: "Boolean", description: "Use text output instead of interactive UI" },
 		{ name: "json", type: "Boolean", description: "Use versioned machine-readable JSON output" },
+		{
+			name: "comment-history",
+			type: "Comment target",
+			description:
+				"Print one comment's retained correction record; '#<index>@<fingerprint>', '#<index>', or '<fingerprint>'",
+		},
 	],
 	output: "Interactive task detail view, plain text with --plain, or versioned JSON with --json",
 	examples: ["backlog task view {{TASK_ID:1}} --plain", "backlog task view {{TASK_ID:1}} --json"],
@@ -3830,6 +3878,7 @@ addHelpSchema(taskCmd.command("view <taskId>"), {
 	.description("display task details")
 	.option("--plain", "use plain text output instead of interactive UI")
 	.option("--json", "print versioned machine-readable JSON output")
+	.option("--comment-history <target>", "print one comment's retained correction record")
 	.action(async (taskId: string, options) => {
 		const outputMode = getTaskReadOutputMode(options);
 		if (!outputMode) return;
@@ -3840,6 +3889,16 @@ addHelpSchema(taskCmd.command("view <taskId>"), {
 		if (!task) {
 			console.error(`Task ${taskId} not found. ${LOCAL_TASK_LOOKUP_HINT}`);
 			process.exitCode = 1;
+			return;
+		}
+
+		if (typeof options.commentHistory === "string") {
+			try {
+				console.log(formatCommentHistory(await loadTaskDetail(core, task), String(options.commentHistory)));
+			} catch (error) {
+				console.error(error instanceof Error ? error.message : String(error));
+				process.exitCode = 1;
+			}
 			return;
 		}
 
@@ -4038,11 +4097,19 @@ taskCmd
 		});
 	});
 
-async function viewDraftById(core: Core, taskId: string, options?: { plain?: boolean }): Promise<void> {
+async function viewDraftById(
+	core: Core,
+	taskId: string,
+	options?: { plain?: boolean; commentHistory?: string },
+): Promise<void> {
 	try {
 		const draft = await core.filesystem.loadDraft(taskId);
 		if (!draft) {
 			console.error(`Draft ${taskId} not found.`);
+			return;
+		}
+		if (typeof options?.commentHistory === "string") {
+			console.log(formatCommentHistory(draft, options.commentHistory));
 			return;
 		}
 		const usePlainOutput = isPlainRequested(options) || shouldAutoPlain;
@@ -4193,6 +4260,18 @@ const draftEditCommand = addHelpSchema(draftCmd.command("edit [taskId]"), {
 		{ name: "append-notes", type: "Markdown", description: "Append to implementation notes; repeatable" },
 		{ name: "comment", type: "Markdown", description: "Append a discussion comment; repeatable" },
 		{ name: "comment-author", type: "String", description: "Author to record for appended comments" },
+		{
+			name: "edit-comment",
+			type: "Comment target",
+			description: "Correct one comment targeted as '#<index>@<fingerprint>' or '<fingerprint>' from the view output",
+		},
+		{ name: "comment-text", type: "Markdown", description: "Replacement body for --edit-comment" },
+		{
+			name: "redact-comment",
+			type: "Comment target",
+			description: "Redact one comment targeted as '#<index>@<fingerprint>' or '<fingerprint>' from the view output",
+		},
+		{ name: "comment-editor", type: "String", description: "Name recorded for --edit-comment and --redact-comment" },
 		{ name: "final-summary", type: "Markdown", description: "Completion summary" },
 		{ name: "append-final-summary", type: "Markdown", description: "Append to final summary; repeatable" },
 		{ name: "clear-final-summary", type: "Boolean", description: "Remove final summary" },
@@ -4261,6 +4340,7 @@ draftCmd
 	.command("view <taskId>")
 	.description("display draft details")
 	.option("--plain", "use plain text output instead of interactive UI")
+	.option("--comment-history <target>", "print one comment's retained correction record")
 	.action(async (taskId: string, options) => {
 		const cwd = await requireProjectRoot();
 		const core = new Core(cwd);

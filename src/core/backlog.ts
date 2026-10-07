@@ -13,7 +13,11 @@ import {
 import { type GitBranchTip, type GitIndexEntry, GitOperations } from "../git/operations.ts";
 import { parseFrontmatter } from "../markdown/frontmatter.ts";
 import { parseTask } from "../markdown/parser.ts";
-import { assertSectionInputHasNoMarkerLines, assertValidChecklistMarks } from "../markdown/structured-sections.ts";
+import {
+	assertSectionInputHasNoMarkerLines,
+	assertValidChecklistMarks,
+	CommentsManager,
+} from "../markdown/structured-sections.ts";
 import {
 	type AcceptanceCriterion,
 	type BacklogConfig,
@@ -28,6 +32,7 @@ import {
 	type Milestone,
 	type SearchFilters,
 	type Task,
+	type TaskComment,
 	type TaskCommentInput,
 	type TaskCreateInput,
 	type TaskListFilter,
@@ -2390,8 +2395,84 @@ export class Core {
 			}
 		}
 
+		if (input.editComment && input.redactComment) {
+			throw new Error(
+				"Correct one comment per command: pass --edit-comment or --redact-comment with its own target, not both.",
+			);
+		}
+
+		const copyComments = (comments: TaskComment[]): TaskComment[] =>
+			comments.map((comment) => ({
+				...comment,
+				...(comment.history && { history: comment.history.map((entry) => ({ ...entry })) }),
+			}));
+
+		const requireCommentEditor = (editor: string, action: string): string => {
+			const normalized = String(editor ?? "")
+				.replace(/\s+/g, " ")
+				.trim();
+			if (!normalized) {
+				throw new Error(
+					`An editor name is required to ${action} a comment. Pass --comment-editor (for example @alex).`,
+				);
+			}
+			if (containsCommentMarker(normalized)) {
+				throw new Error("Comment editor cannot contain Backlog comment markers.");
+			}
+			if (containsCommentDelimiter(normalized)) {
+				throw new Error("Comment editor cannot contain standalone '---' delimiter lines.");
+			}
+			return normalized;
+		};
+
+		if (input.editComment) {
+			const currentComments = Array.isArray(task.comments) ? copyComments(task.comments) : [];
+			const comment = CommentsManager.resolveTargetedComment(currentComments, input.editComment.target, {
+				requireFingerprint: true,
+			});
+			if (CommentsManager.isRedacted(comment)) {
+				throw new Error(
+					`Comment #${comment.index} was redacted and cannot be edited; the redaction record stays in place.`,
+				);
+			}
+			const sanitized = sanitizeCommentInput(input.editComment.body);
+			if (!sanitized) {
+				throw new Error("A corrected comment body cannot be empty.");
+			}
+			if (sanitized.body !== comment.body) {
+				comment.history = [
+					...(comment.history ?? []),
+					{
+						action: "edited",
+						date: new Date().toISOString().slice(0, 16).replace("T", " "),
+						editor: requireCommentEditor(input.editComment.editor, "correct"),
+						body: comment.body,
+					},
+				];
+				comment.body = sanitized.body;
+				task.comments = currentComments;
+				mutated = true;
+			}
+		}
+
+		if (input.redactComment) {
+			const currentComments = Array.isArray(task.comments) ? copyComments(task.comments) : [];
+			const comment = CommentsManager.resolveTargetedComment(currentComments, input.redactComment.target, {
+				requireFingerprint: true,
+			});
+			if (CommentsManager.isRedacted(comment)) {
+				throw new Error(`Comment #${comment.index} is already redacted; its correction record is preserved as is.`);
+			}
+			const editor = requireCommentEditor(input.redactComment.editor, "redact");
+			const date = new Date().toISOString().slice(0, 16).replace("T", " ");
+			comment.history = [...(comment.history ?? []), { action: "redacted", date, editor }];
+			comment.body = `[Redacted by ${editor} on ${date}.]`;
+			task.comments = currentComments;
+			mutated = true;
+		}
+
 		if (input.appendComments && input.appendComments.length > 0) {
-			const currentComments = Array.isArray(task.comments) ? task.comments.map((comment) => ({ ...comment })) : [];
+			const currentComments = Array.isArray(task.comments) ? copyComments(task.comments) : [];
 			let nextIndex = currentComments.length > 0 ? Math.max(...currentComments.map((comment) => comment.index)) + 1 : 1;
 			const createdDate = new Date().toISOString().slice(0, 16).replace("T", " ");
 			for (const value of input.appendComments) {

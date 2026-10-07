@@ -1,4 +1,5 @@
 import type { TaskDetail } from "../core/task-detail.ts";
+import { CommentsManager } from "../markdown/structured-sections.ts";
 import type { Task } from "../types/index.ts";
 import type { ChecklistItem } from "../ui/checklist.ts";
 import { transformCodePathsPlain } from "../ui/code-path.ts";
@@ -65,7 +66,9 @@ function formatCommentHeader(
 	comment: NonNullable<Task["comments"]>[number],
 	dateOptions: UtcDateDisplayOptions = {},
 ): string {
-	const parts = [`#${comment.index}`];
+	// The fingerprint is the correction target handle: copy it from here into
+	// --edit-comment / --redact-comment to change exactly the comment you read.
+	const parts = [`#${comment.index}@${CommentsManager.fingerprint(comment)}`];
 	if (comment.author) {
 		parts.push(comment.author);
 	}
@@ -73,6 +76,32 @@ function formatCommentHeader(
 		parts.push(formatDateForDisplay(comment.createdDate, dateOptions));
 	}
 	return parts.join(" - ");
+}
+
+function formatCommentHistoryLines(comment: NonNullable<Task["comments"]>[number]): string[] {
+	const entries = comment.history ?? [];
+	if (entries.length === 0) return [];
+	const lines = ["History:"];
+	for (const entry of entries) {
+		const actor = entry.editor ? ` ${entry.editor}` : "";
+		lines.push(`- ${formatDateForDisplay(entry.date, plainDateDisplayOptions)}${actor} ${entry.action}`);
+		if (entry.action === "edited" && entry.body) {
+			for (const line of entry.body.split("\n")) {
+				lines.push(`  ${transformCodePathsPlain(line)}`);
+			}
+		}
+	}
+	return lines;
+}
+
+/** One comment's retained correction record, targeted the way a correction targets it. */
+export function formatCommentHistory(task: Task, target: string): string {
+	const comment = CommentsManager.resolveTargetedComment(task.comments ?? [], target);
+	const lines = [formatCommentHeader(comment, plainDateDisplayOptions), ...formatCommentHistoryLines(comment)];
+	if ((comment.history ?? []).length === 0) {
+		lines.push("No correction history.");
+	}
+	return lines.join("\n");
 }
 
 /** The graph block task detail renders, with its heading, or no lines at all for an isolated task. */
@@ -222,6 +251,7 @@ export function formatTaskPlainText(task: TaskDetail, options: TaskPlainTextOpti
 		for (const comment of comments) {
 			lines.push(formatCommentHeader(comment, plainDateDisplayOptions));
 			lines.push(transformCodePathsPlain(comment.body.trim()));
+			lines.push(...formatCommentHistoryLines(comment));
 			lines.push("");
 		}
 	}

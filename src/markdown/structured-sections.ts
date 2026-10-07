@@ -1,4 +1,5 @@
-import type { AcceptanceCriterion, TaskComment } from "../types/index.ts";
+import { createHash } from "node:crypto";
+import type { AcceptanceCriterion, TaskComment, TaskCommentHistoryEntry } from "../types/index.ts";
 import { getStructuredSectionTitles } from "./section-titles.ts";
 
 export type StructuredSectionKey = "description" | "implementationPlan" | "implementationNotes" | "finalSummary";
@@ -1142,6 +1143,28 @@ function parseCommentMetadata(
 	return { index, ...(author && { author }), createdDate };
 }
 
+/**
+ * Reads the `edited:` / `redacted:` metadata group of one correction record.
+ * `edited: <date> by <editor>` keeps a delimited body (the replaced text);
+ * `redacted:` records the redaction without one. Any other metadata group is
+ * not a correction record and leaves the caller's cursor untouched.
+ */
+function parseHistoryEntryMetadata(lines: string[]): TaskCommentHistoryEntry | undefined {
+	let parsed: TaskCommentHistoryEntry | undefined;
+	for (const line of lines) {
+		const match = line.match(/^(edited|redacted):[ \t]*(.*)$/i);
+		if (!match) continue;
+		const rest = String(match[2] ?? "").trim();
+		const byMatch = rest.match(/^(.*?)\s+by\s+(.*)$/i);
+		parsed = {
+			action: String(match[1]).toLowerCase() as TaskCommentHistoryEntry["action"],
+			date: (byMatch?.[1] ?? rest).trim(),
+			...(byMatch && { editor: normalizeCommentMetadata(byMatch[2]) }),
+		};
+	}
+	return parsed && parsed.date.length > 0 ? parsed : undefined;
+}
+
 function parseLegacyCommentBlock(block: string, fallbackIndex: number): TaskComment | undefined {
 	const normalized = block.replace(/\r\n/g, "\n").trim();
 	if (!normalized) return undefined;
@@ -1166,10 +1189,57 @@ function parseDelimitedComments(sectionBody: string): TaskComment[] {
 	let lineIndex = 0;
 
 	const isDelimiter = (line: string): boolean => line.trim() === COMMENT_DELIMITER;
+	const isBlank = (line: string): boolean => (line ?? "").trim() === "";
 	const skipBlankLines = () => {
-		while (lineIndex < lines.length && lines[lineIndex]?.trim() === "") {
+		while (lineIndex < lines.length && isBlank(lines[lineIndex] ?? "")) {
 			lineIndex += 1;
 		}
+	};
+
+	/**
+	 * Reads the correction groups that follow a comment body. Groups whose
+	 * metadata carries an `edited:` or `redacted:` key belong to the current
+	 * comment; anything else (blank line, next comment, section end) stops the
+	 * scan and rewinds so the outer loop reads it as usual.
+	 */
+	const readHistoryEntries = (): TaskCommentHistoryEntry[] => {
+		const entries: TaskCommentHistoryEntry[] = [];
+		while (lineIndex < lines.length) {
+			const scan = lineIndex;
+			const metadataLines: string[] = [];
+			while (lineIndex < lines.length && !isDelimiter(lines[lineIndex] ?? "") && !isBlank(lines[lineIndex] ?? "")) {
+				metadataLines.push(lines[lineIndex] ?? "");
+				lineIndex += 1;
+			}
+			const entry = parseHistoryEntryMetadata(metadataLines);
+			if (!entry) {
+				lineIndex = scan;
+				break;
+			}
+			if (entry.action === "edited") {
+				if (lineIndex >= lines.length || !isDelimiter(lines[lineIndex] ?? "")) {
+					lineIndex = scan;
+					break;
+				}
+				lineIndex += 1;
+				const bodyLines: string[] = [];
+				while (lineIndex < lines.length && !isDelimiter(lines[lineIndex] ?? "")) {
+					bodyLines.push(lines[lineIndex] ?? "");
+					lineIndex += 1;
+				}
+				if (lineIndex >= lines.length) {
+					lineIndex = scan;
+					break;
+				}
+				lineIndex += 1;
+				entries.push({ ...entry, body: bodyLines.join("\n").trim() });
+				continue;
+			}
+			// A redaction is terminal: the corrected record can never continue after it.
+			entries.push(entry);
+			break;
+		}
+		return entries;
 	};
 
 	while (lineIndex < lines.length) {
@@ -1195,11 +1265,13 @@ function parseDelimitedComments(sectionBody: string): TaskComment[] {
 		const body = bodyLines.join("\n").trim();
 		if (!body) continue;
 		const { author, createdDate } = parseCommentMetadata(metadataLines, comments.length + 1);
+		const history = readHistoryEntries();
 		comments.push({
 			index: comments.length + 1,
 			body,
 			createdDate,
 			...(author && { author }),
+			...(history.length > 0 && { history }),
 		});
 	}
 
@@ -1238,38 +1310,51 @@ function parseComments(content: string): TaskComment[] {
 	}));
 }
 
+function validateCommentBlockText(value: string, label: string): void {
+	if (containsCommentMarker(value)) {
+		throw new Error(`${label} cannot contain Backlog comment markers.`);
+	}
+	if (containsCommentDelimiter(value)) {
+		throw new Error(`${label} cannot contain standalone '---' delimiter lines.`);
+	}
+}
+
+function formatCommentHistoryEntry(entry: TaskCommentHistoryEntry): string[] {
+	const actor = entry.editor ? ` by ${entry.editor}` : "";
+	const lines = [`${entry.action}: ${entry.date}${actor}`];
+	if (entry.action === "edited") {
+		const body = String(entry.body ?? "")
+			.replace(/\r\n/g, "\n")
+			.trim();
+		if (!body) {
+			throw new Error("A comment correction record must retain the body it replaced.");
+		}
+		validateCommentBlockText(body, "Comment correction record");
+		lines.push(COMMENT_DELIMITER, body, COMMENT_DELIMITER);
+	}
+	return lines;
+}
+
 function formatCommentBlock(comment: TaskComment): string {
 	const body = String(comment.body ?? "")
 		.replace(/\r\n/g, "\n")
 		.trim();
-	if (containsCommentMarker(body)) {
-		throw new Error("Comment body cannot contain Backlog comment markers.");
-	}
-	if (containsCommentDelimiter(body)) {
-		throw new Error("Comment body cannot contain standalone '---' delimiter lines.");
-	}
+	validateCommentBlockText(body, "Comment body");
 	const lines: string[] = [];
 	const author = normalizeCommentMetadata(comment.author);
 	if (author) {
-		if (containsCommentMarker(author)) {
-			throw new Error("Comment author cannot contain Backlog comment markers.");
-		}
-		if (containsCommentDelimiter(author)) {
-			throw new Error("Comment author cannot contain standalone '---' delimiter lines.");
-		}
+		validateCommentBlockText(author, "Comment author");
 		lines.push(`author: ${author}`);
 	}
 	const createdDate = String(comment.createdDate ?? "").trim();
-	if (containsCommentMarker(createdDate)) {
-		throw new Error("Comment created date cannot contain Backlog comment markers.");
-	}
-	if (containsCommentDelimiter(createdDate)) {
-		throw new Error("Comment created date cannot contain standalone '---' delimiter lines.");
-	}
+	validateCommentBlockText(createdDate, "Comment created date");
 	if (createdDate) {
 		lines.push(`created: ${createdDate}`);
 	}
 	lines.push(COMMENT_DELIMITER, body, COMMENT_DELIMITER);
+	for (const entry of comment.history ?? []) {
+		lines.push(...formatCommentHistoryEntry(entry));
+	}
 	return lines.join("\n");
 }
 
@@ -1349,6 +1434,48 @@ function updateCommentsContent(content: string, comments: TaskComment[]): string
 	return restoreLineEndings(collapseBlankLines(output).trim(), useCRLF);
 }
 
+const COMMENT_FINGERPRINT_LENGTH = 8;
+const COMMENT_TARGET_HASH_REGEX = /^[0-9a-f]{6,64}$/;
+
+interface CommentTargetQuery {
+	ordinal?: number;
+	hash?: string;
+}
+
+/**
+ * Parses a comment target token: `#<index>@<fingerprint>` pins one displayed
+ * position and its content, a bare fingerprint selects the one comment whose
+ * content matches, and a bare `#<index>` is only meaningful for reads. Anything
+ * else is malformed and rejected before any write is attempted.
+ */
+function parseCommentTarget(target: string): CommentTargetQuery {
+	const trimmed = target.trim();
+	const withOrdinal = /^#(\d+)(?:@([0-9a-fA-F]{6,64}))?$/.exec(trimmed);
+	if (withOrdinal) {
+		return parseOrdinalTarget(String(withOrdinal[1]), withOrdinal[2], trimmed);
+	}
+	if (/^\d+$/.test(trimmed) && !/^[0-9a-fA-F]{8}$/.test(trimmed)) {
+		// A bare ordinal reads as a position; corrections still demand the fingerprint.
+		return parseOrdinalTarget(trimmed, undefined, trimmed);
+	}
+	if (COMMENT_TARGET_HASH_REGEX.test(trimmed.toLowerCase())) {
+		return { hash: trimmed.toLowerCase() };
+	}
+	throw new Error(invalidCommentTargetMessage(trimmed));
+}
+
+function parseOrdinalTarget(ordinalText: string, hash: string | undefined, original: string): CommentTargetQuery {
+	const ordinal = Number.parseInt(ordinalText, 10);
+	if (!Number.isFinite(ordinal) || ordinal < 1) {
+		throw new Error(invalidCommentTargetMessage(original));
+	}
+	return { ordinal, ...(hash && { hash: hash.toLowerCase() }) };
+}
+
+function invalidCommentTargetMessage(target: string): string {
+	return `Invalid comment target "${target}". Use "#<index>@<fingerprint>" or "<fingerprint>" as shown by 'task view' or 'draft view'.`;
+}
+
 /* biome-ignore lint/complexity/noStaticOnlyClass: Utility methods grouped for clarity */
 export class CommentsManager {
 	static readonly BEGIN_MARKER = COMMENTS_BEGIN_MARKER;
@@ -1363,6 +1490,76 @@ export class CommentsManager {
 
 	static updateContent(content: string, comments: TaskComment[]): string {
 		return updateCommentsContent(content, comments);
+	}
+
+	/**
+	 * Stable content identity of one comment: a short digest over everything a
+	 * reader sees (author, time, body, retained corrections). Unrelated edits to
+	 * other comments never change it, so it survives round trips while any
+	 * correction of this comment invalidates a previously read fingerprint.
+	 */
+	static fingerprint(comment: TaskComment): string {
+		const canonical = JSON.stringify({
+			author: comment.author ?? null,
+			createdDate: comment.createdDate,
+			body: comment.body,
+			history: comment.history ?? null,
+		});
+		return createHash("sha256").update(canonical).digest("hex").slice(0, COMMENT_FINGERPRINT_LENGTH);
+	}
+
+	/** A comment whose latest correction is a redaction: its body is the notice and its record must stay. */
+	static isRedacted(comment: TaskComment): boolean {
+		return comment.history?.at(-1)?.action === "redacted";
+	}
+
+	/**
+	 * Selects exactly one comment for a read or a correction. Writes must pass
+	 * `requireFingerprint` so a stale `#<index>` cannot silently apply to a
+	 * comment that changed since it was read; missing, stale, and ambiguous
+	 * identities all fail closed before the caller mutates anything.
+	 */
+	static resolveTargetedComment(
+		comments: TaskComment[],
+		target: string,
+		options: { requireFingerprint?: boolean } = {},
+	): TaskComment {
+		const query = parseCommentTarget(target);
+		if (query.ordinal !== undefined) {
+			const comment = comments.find((candidate) => candidate.index === query.ordinal);
+			if (!comment) {
+				throw new Error(`Comment #${query.ordinal} not found.`);
+			}
+			if (!query.hash) {
+				if (options.requireFingerprint) {
+					throw new Error(
+						`Comment target "#${query.ordinal}" needs the comment fingerprint for a correction. Use "#${query.ordinal}@<fingerprint>" as shown by 'task view' or 'draft view'.`,
+					);
+				}
+				return comment;
+			}
+			if (CommentsManager.fingerprint(comment) !== query.hash) {
+				throw new Error(
+					`Comment #${query.ordinal} does not match fingerprint ${query.hash}; it changed since it was read. Re-read the task or draft and retry.`,
+				);
+			}
+			return comment;
+		}
+		const hash = query.hash ?? "";
+		const matches = comments.filter((candidate) => CommentsManager.fingerprint(candidate) === hash);
+		if (matches.length === 0) {
+			throw new Error(
+				`No comment matches fingerprint ${hash}; it may have changed since it was read. Re-read the task or draft and retry.`,
+			);
+		}
+		if (matches.length > 1) {
+			throw new Error(
+				`Comment target is ambiguous: fingerprint ${hash} matches comments ${matches
+					.map((comment) => `#${comment.index}`)
+					.join(", ")}. Target one with "#<index>@${hash}".`,
+			);
+		}
+		return matches[0] as TaskComment;
 	}
 }
 

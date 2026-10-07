@@ -339,7 +339,7 @@ describe("Task comments", () => {
 
 		const output = edit.stdout.toString();
 		expect(output).toContain("Comments:");
-		expect(output).toContain("#1 - @cli");
+		expect(output).toMatch(/#1@[0-9a-f]{8} - @cli/);
 		expect(output).toContain("CLI comment body");
 
 		const core = new Core(TEST_DIR);

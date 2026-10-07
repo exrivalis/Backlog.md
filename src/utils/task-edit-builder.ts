@@ -178,6 +178,45 @@ export function buildTaskUpdateInput(args: TaskEditArgs): TaskUpdateInput {
 		}));
 	}
 
+	const editCommentTarget = typeof args.editComment === "string" ? args.editComment.trim() : undefined;
+	const redactCommentTarget = typeof args.redactComment === "string" ? args.redactComment.trim() : undefined;
+	if (editCommentTarget && redactCommentTarget) {
+		throw new Error("Cannot combine --edit-comment with --redact-comment. Correct one comment per command.");
+	}
+	if (typeof args.commentText === "string" && !editCommentTarget) {
+		throw new Error("--comment-text replaces the body of a comment targeted by --edit-comment; pass a target.");
+	}
+	if (typeof args.commentEditor === "string" && !editCommentTarget && !redactCommentTarget) {
+		throw new Error("--comment-editor records who corrected a comment; pass --edit-comment or --redact-comment.");
+	}
+	if (editCommentTarget) {
+		const body = typeof args.commentText === "string" ? args.commentText : "";
+		if (body.trim().length === 0) {
+			throw new Error("--comment-text needs the corrected comment body.");
+		}
+	}
+	if (editCommentTarget || redactCommentTarget) {
+		const editor = typeof args.commentEditor === "string" ? args.commentEditor.trim() : "";
+		if (!editor) {
+			throw new Error(
+				`An editor name is required to ${editCommentTarget ? "correct" : "redact"} a comment. Pass --comment-editor (for example @alex).`,
+			);
+		}
+	}
+	if (editCommentTarget) {
+		updateInput.editComment = {
+			target: editCommentTarget,
+			body: String(args.commentText),
+			editor: String(args.commentEditor).trim(),
+		};
+	}
+	if (redactCommentTarget) {
+		updateInput.redactComment = {
+			target: redactCommentTarget,
+			editor: String(args.commentEditor).trim(),
+		};
+	}
+
 	if (typeof args.finalSummary === "string") {
 		updateInput.finalSummary = args.finalSummary;
 	}

@@ -49,6 +49,8 @@ import {
 import { sortByTaskId } from "../utils/task-sorting.ts";
 import { matchesTaskTypeFilter } from "../utils/task-type-config.ts";
 
+const MILESTONE_DESCRIPTION_SECTION_PATTERN = /(##\s+Description\s*(?:\r?\n)+)([\s\S]*?)(?=(?:\r?\n)##\s+|$)/i;
+
 // Interface for task path resolution context
 interface TaskPathContext {
 	filesystem: {
@@ -1691,14 +1693,23 @@ ${rawContent.trim()}
 
 	private rewriteDefaultMilestoneDescription(rawContent: string, previousTitle: string, nextTitle: string): string {
 		const defaultDescription = `Milestone: ${previousTitle}`;
-		const descriptionSectionPattern = /(##\s+Description\s*(?:\r?\n)+)([\s\S]*?)(?=(?:\r?\n)##\s+|$)/i;
 
-		return rawContent.replace(descriptionSectionPattern, (fullSection, heading: string, body: string) => {
+		return rawContent.replace(MILESTONE_DESCRIPTION_SECTION_PATTERN, (fullSection, heading: string, body: string) => {
 			if (body.trim() !== defaultDescription) {
 				return fullSection;
 			}
 			const trailingWhitespace = body.match(/\s*$/)?.[0] ?? "";
 			return `${heading}Milestone: ${nextTitle}${trailingWhitespace}`;
+		});
+	}
+
+	private replaceMilestoneDescriptionSection(rawContent: string, nextDescription: string): string {
+		if (!MILESTONE_DESCRIPTION_SECTION_PATTERN.test(rawContent)) {
+			return `${rawContent.replace(/\s+$/, "")}\n\n## Description\n\n${nextDescription}\n`;
+		}
+		return rawContent.replace(MILESTONE_DESCRIPTION_SECTION_PATTERN, (_fullSection, heading: string, body: string) => {
+			const trailingWhitespace = body.match(/\s*$/)?.[0] ?? "";
+			return `${heading}${nextDescription}${trailingWhitespace}`;
 		});
 	}
 
@@ -1980,6 +1991,55 @@ ${description || `Milestone: ${title}`}`,
 					if (restorePath) {
 						await Bun.write(restorePath, originalContent);
 					}
+				}
+			} catch {
+				// Ignore rollback failures and surface operation failure to caller.
+			}
+			return { success: false };
+		}
+	}
+
+	async updateMilestoneDescription(
+		identifier: string,
+		description: string | null,
+	): Promise<{
+		success: boolean;
+		filepath?: string;
+		milestone?: Milestone;
+		previousDescription?: string;
+	}> {
+		let filepath: string | undefined;
+		let originalContent: string | undefined;
+
+		try {
+			const milestoneMatch = await this.findMilestoneFile(identifier, "active");
+			if (!milestoneMatch) {
+				return { success: false };
+			}
+
+			const { milestone } = milestoneMatch;
+			const nextDescription = description?.trim() ? description : `Milestone: ${milestone.title}`;
+			const nextRawContent = this.replaceMilestoneDescriptionSection(milestone.rawContent, nextDescription);
+			const updatedContent = this.serializeMilestoneContent(
+				milestone.id,
+				milestone.title,
+				nextRawContent,
+				milestone.dueDate,
+			);
+			filepath = milestoneMatch.filepath;
+			originalContent = milestoneMatch.content;
+			await Bun.write(filepath, updatedContent);
+
+			return {
+				success: true,
+				filepath,
+				milestone: parseMilestone(updatedContent),
+				previousDescription: milestone.description,
+			};
+		} catch {
+			try {
+				if (filepath && originalContent !== undefined) {
+					await Bun.write(filepath, originalContent);
 				}
 			} catch {
 				// Ignore rollback failures and surface operation failure to caller.

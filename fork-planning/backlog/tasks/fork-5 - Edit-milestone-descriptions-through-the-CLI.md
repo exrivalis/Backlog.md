@@ -1,11 +1,11 @@
 ---
 id: FORK-5
 title: Edit milestone descriptions through the CLI
-status: To Do
+status: In Progress
 assignee:
   - '@alex-agent'
 created_date: '2026-10-07 07:58'
-updated_date: '2026-10-07 08:42'
+updated_date: '2026-10-07 09:08'
 labels: []
 dependencies: []
 documentation:

@@ -237,6 +237,8 @@ export interface Decision {
 	supersededBy?: string;
 	readonly rawContent: string; // Raw markdown content without frontmatter
 	path?: string; // Decisions-relative file path, set when listed from disk
+	/** True when the record lives in backlog/archive/decisions; set when loaded from disk. */
+	archived?: boolean;
 }
 
 export interface DecisionUpdateInput {

@@ -74,14 +74,18 @@ export async function generateNextDocId(core: Core): Promise<string> {
 }
 
 /**
- * Generate the next available decision ID by checking all branches and local decisions
+ * Generate the next available decision ID by checking all branches and local decisions,
+ * including archived ones so a retired ADR's ID is never reallocated
  * @param core Core instance for filesystem and git operations
  * @returns Promise<string> Next available decision ID (e.g., "decision-001")
  */
 export async function generateNextDecisionId(core: Core): Promise<string> {
 	const config = await core.filesystem.loadConfig();
-	// Load local decisions
-	const decisions = await core.filesystem.listDecisions();
+	// Load local decisions, active and archived
+	const [decisions, archivedDecisions] = await Promise.all([
+		core.filesystem.listDecisions(),
+		core.filesystem.listArchivedDecisions(),
+	]);
 	const allIds: string[] = [];
 
 	try {
@@ -98,10 +102,14 @@ export async function generateNextDecisionId(core: Core): Promise<string> {
 
 		const branches = await core.gitOps.listAllBranches();
 
-		// Load files from all branches in parallel
+		// Load files from all branches in parallel, from the active and archived decision trees
 		const branchFilePromises = branches.map(async (branch) => {
-			const files = await core.gitOps.listFilesInTree(branch, `${backlogDir}/decisions`);
-			return files
+			const trees = await Promise.all([
+				core.gitOps.listFilesInTree(branch, `${backlogDir}/decisions`),
+				core.gitOps.listFilesInTree(branch, `${backlogDir}/archive/decisions`),
+			]);
+			return trees
+				.flat()
 				.map((file) => {
 					const match = file.match(/decision-(\d+)/);
 					return match ? `decision-${match[1]}` : null;
@@ -121,7 +129,7 @@ export async function generateNextDecisionId(core: Core): Promise<string> {
 	}
 
 	// Add local decision IDs
-	for (const decision of decisions) {
+	for (const decision of [...decisions, ...archivedDecisions]) {
 		allIds.push(decision.id);
 	}
 

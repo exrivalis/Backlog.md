@@ -6,6 +6,11 @@ export const ADR_KIND = "architecture";
 export const ADR_STATUSES = ["proposed", "accepted", "rejected", "superseded"] as const;
 export type AdrStatus = (typeof ADR_STATUSES)[number];
 
+/** An applicable ADR still governs current work; anything else (rejected, deprecated, superseded) is retired. */
+export function isRetiredAdrStatus(status: string): boolean {
+	return status !== "proposed" && status !== "accepted";
+}
+
 /** Terminal states: a rejected or superseded ADR no longer accepts status changes. */
 const ADR_TRANSITIONS: Record<AdrStatus, readonly AdrStatus[]> = {
 	proposed: ["accepted", "rejected"],

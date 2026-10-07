@@ -41,7 +41,7 @@ import {
 } from "../types/index.ts";
 import { normalizeAssignee } from "../utils/assignee.ts";
 import { decisionIdKey } from "../utils/decision-id.ts";
-import { documentIdKey, findDocumentById, normalizeDocumentId } from "../utils/document-id.ts";
+import { documentIdKey, documentIdsEqual, findDocumentById, normalizeDocumentId } from "../utils/document-id.ts";
 import {
 	getDocumentSubPathFromRelativePath,
 	normalizeDocumentRelativePath,
@@ -106,6 +106,15 @@ import { upsertTaskUpdatedDate } from "../utils/task-updated-date.ts";
 import { getTerminalStatus, isTerminalStatus } from "../utils/terminal-status.ts";
 import { migrateConfig, needsMigration } from "./config-migration.ts";
 import { ContentStore, type TaskCorpusSnapshot } from "./content-store.ts";
+import {
+	buildDeletionPreview,
+	type DeletionReferenceUpdate,
+	type DeletionResolution,
+	displayPath,
+	documentAbsolutePath,
+	isDocumentIdReference,
+	validateDeletionResolution,
+} from "./deletion-preview.ts";
 import {
 	applyDuplicateTaskIdRepair,
 	type DuplicateRepairPlan,
@@ -218,6 +227,21 @@ type VacatedIdCleanup = {
 	active: Task[];
 	completed: Task[];
 };
+
+/** Records whose structured documentation references a document being deleted, by store. */
+interface DocumentReferenceCleanup {
+	tasks: Task[];
+	drafts: Task[];
+}
+
+export interface DocumentDeletionResult {
+	id: string;
+	title: string;
+	/** Project-relative path of the removed file. */
+	path: string;
+	/** The reference edits that were applied alongside the deletion. */
+	updates: DeletionReferenceUpdate[];
+}
 
 function vacatedIdCleanupTargets(cleanup: VacatedIdCleanup): Task[] {
 	return [...cleanup.active, ...cleanup.completed];
@@ -4088,6 +4112,186 @@ export class Core {
 
 		await this.createDocument(updatedDoc, autoCommit, subPath);
 		return (await this.getDocument(existingDoc.id)) ?? updatedDoc;
+	}
+
+	/**
+	 * Delete one document file after an explicit request. Every active record whose structured
+	 * documentation references it is rewritten first — under that record's file lock, with the
+	 * reference set re-scanned inside the locks — and only then is the file removed. A cancel
+	 * resolution deletes only a document with no active references; unlink and reassign rewrite
+	 * every referencing record as the validated update set describes.
+	 *
+	 * Deletion removes the file outright: it is not a move to an archive, and Git restores only
+	 * committed versions.
+	 */
+	async deleteDocument(
+		documentId: string,
+		resolution: DeletionResolution,
+		autoCommit?: boolean,
+	): Promise<DocumentDeletionResult> {
+		const document = await this.getDocument(documentId);
+		if (!document) {
+			throw new Error(`Document ${documentId} not found. Nothing would be deleted.`);
+		}
+		const docId = document.id;
+		const documentPath = documentAbsolutePath(this, document.path ?? `${docId}.md`);
+
+		const scanReferences = async (): Promise<DocumentReferenceCleanup> => {
+			const [active, completed, drafts] = await Promise.all([
+				this.fs.listTasks(),
+				this.fs.listCompletedTasks(),
+				this.fs.listDrafts(),
+			]);
+			const withReferences = (records: Task[]) =>
+				records.filter((record) =>
+					(record.documentation ?? []).some((entry) => isDocumentIdReference(entry) && documentIdsEqual(entry, docId)),
+				);
+			return { tasks: withReferences([...active, ...completed]), drafts: withReferences(drafts) };
+		};
+
+		// The same discipline as a vacated task ID: the referencing records must be read and
+		// locked as one state, so a record that starts referencing the document while the locks
+		// are being taken is caught by re-scanning inside them and widens the lock set.
+		let candidates = await scanReferences();
+		for (let attempt = 0; attempt < VACATED_ID_CLEANUP_LOCK_ATTEMPTS; attempt++) {
+			const covered = new Set(
+				[...candidates.tasks, ...candidates.drafts].map((record) => record.id.trim().toLowerCase()),
+			);
+			const covers = (record: Task) => covered.has(record.id.trim().toLowerCase());
+			const outcome = await this.fs.withTaskLocks(candidates.tasks, () =>
+				this.withDraftLocks(
+					candidates.drafts,
+					async (): Promise<{ value: DocumentDeletionResult } | { widened: DocumentReferenceCleanup }> => {
+						const fresh = await scanReferences();
+						if ([...fresh.tasks, ...fresh.drafts].some((record) => !covers(record))) {
+							return { widened: fresh };
+						}
+						return {
+							value: await this.deleteDocumentUnderLocks(document, fresh, resolution, autoCommit, documentPath),
+						};
+					},
+				),
+			);
+			if ("value" in outcome) return outcome.value;
+			candidates = outcome.widened;
+		}
+		throw new Error(
+			`Could not take a stable set of record locks to clean references to ${docId}. Retry once the records referencing it stop changing.`,
+		);
+	}
+
+	private async deleteDocumentUnderLocks(
+		document: Document,
+		references: DocumentReferenceCleanup,
+		resolution: DeletionResolution,
+		autoCommit: boolean | undefined,
+		documentPath: string,
+	): Promise<DocumentDeletionResult> {
+		const docId = document.id;
+		// Re-validate under the locks: the resolution the requester saw may be stale by the time
+		// the files are locked, and a rejected resolution must not touch anything.
+		const preview = await buildDeletionPreview(this, "document", docId);
+		if (preview.status !== "found") {
+			throw new Error(preview.message);
+		}
+		if (resolution.action === "cancel" && preview.references.length > 0) {
+			throw new Error(
+				`${docId} has ${preview.references.length} active structured reference${
+					preview.references.length === 1 ? "" : "s"
+				}. Nothing was deleted; choose unlink or reassign to resolve them.`,
+			);
+		}
+		const validation = await validateDeletionResolution(this, preview, resolution);
+		if (!validation.ok) {
+			throw new Error(validation.errors.join("\n"));
+		}
+
+		const updatedDate = new Date().toISOString().slice(0, 16).replace("T", " ");
+		const replacementBySource = new Map(
+			validation.updates.map((update) => [update.sourceId.trim().toLowerCase(), update.replacement] as const),
+		);
+		const rewriteDocumentation = (record: Task): Task | null => {
+			const replacement = replacementBySource.get(record.id.trim().toLowerCase());
+			if (replacement === undefined) return null;
+			const documentation = (record.documentation ?? []).flatMap((entry) =>
+				isDocumentIdReference(entry) && documentIdsEqual(entry, docId)
+					? replacement === null
+						? []
+						: [replacement]
+					: [entry],
+			);
+			return { ...record, documentation, updatedDate };
+		};
+
+		// Reference edits land before the file is removed: if a write fails here, the document
+		// still exists and no link is left dangling.
+		const editedPaths: string[] = [];
+		const writeAll = async () => {
+			for (const record of references.tasks) {
+				const updated = rewriteDocumentation(record);
+				if (!updated) continue;
+				const savedPath = await this.fs.saveTask(updated);
+				editedPaths.push(savedPath);
+				this.contentStore?.upsertTask({ ...updated, filePath: savedPath });
+			}
+			for (const record of references.drafts) {
+				const updated = rewriteDocumentation(record);
+				if (!updated) continue;
+				editedPaths.push(await this.fs.saveDraft(updated));
+			}
+		};
+		if (this.contentStore) await this.contentStore.batchTaskUpdates(writeAll);
+		else await writeAll();
+
+		try {
+			await unlink(documentPath);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") {
+				const editedNote =
+					editedPaths.length > 0
+						? ` The edited records are on disk (${editedPaths.length} file${editedPaths.length === 1 ? "" : "s"}).`
+						: "";
+				throw new Error(
+					`Could not delete ${displayPath(this, documentPath)}: ${
+						error instanceof Error ? error.message : String(error)
+					}.${editedNote}`,
+				);
+			}
+		}
+
+		if (await this.shouldAutoCommit(autoCommit)) {
+			try {
+				// `git add` on the removed path stages the deletion; an untracked path may match
+				// nothing, which must not block committing the reference edits.
+				await this.git.addFile(documentPath);
+			} catch {
+				// The deleted file was never tracked.
+			}
+			try {
+				await this.git.commitFiles(`backlog: Delete document ${docId}`, [documentPath, ...editedPaths]);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				throw new Error(
+					`Deleted document ${docId}, but committing failed: ${message}. The deletion and the reference edits are on disk but uncommitted.`,
+				);
+			}
+		}
+
+		return { id: docId, title: document.title, path: displayPath(this, documentPath), updates: validation.updates };
+	}
+
+	/** Draft counterpart of the bulk task lock: sorted acquisition, then run. */
+	private async withDraftLocks<T>(drafts: Task[], fn: () => Promise<T>): Promise<T> {
+		const acquire = async (index: number): Promise<T> => {
+			const draft = drafts[index];
+			if (!draft) return await fn();
+			const filePath = draft.filePath?.trim();
+			if (!filePath) {
+				throw new Error(`Cannot lock draft ${draft.id} without its file path.`);
+			}
+			return await this.fs.withDraftLock({ filePath, canonicalId: draft.id }, () => acquire(index + 1));
+		};
+		return await acquire(0);
 	}
 
 	async listTasksWithMetadata(

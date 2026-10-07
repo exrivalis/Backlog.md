@@ -11,7 +11,6 @@ import {
 	newTaskLockError,
 } from "../file-system/operations.ts";
 import { type GitBranchTip, type GitIndexEntry, GitOperations } from "../git/operations.ts";
-import { parseFrontmatter } from "../markdown/frontmatter.ts";
 import { parseDecision, parseTask } from "../markdown/parser.ts";
 import { validateSpecificationContent } from "../markdown/spec-requirements.ts";
 import {

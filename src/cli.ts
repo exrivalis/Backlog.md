@@ -4969,6 +4969,74 @@ addListWindowOptions(decisionListCommand)
 		});
 	});
 
+// Decision view command
+addHelpSchema(decisionCmd.command("view <decisionId>"), {
+	reads: "Decision metadata and markdown body",
+	required: [{ name: "decisionId", type: "Decision ID", description: "Decision to display" }],
+	optional: [{ name: "plain", type: "Boolean", description: "Use text output instead of interactive UI" }],
+	output: "Decision metadata and markdown content",
+	examples: ["backlog decision view decision-1", "backlog decision view decision-1 --plain"],
+})
+	.description("view a decision")
+	.option("--plain", "use plain text output instead of interactive UI")
+	.action(async (decisionId: string, options) => {
+		const cwd = await requireProjectRoot();
+		const core = new Core(cwd);
+		try {
+			const content = await core.getDecisionContent(decisionId);
+			if (content === null) {
+				console.error(`Decision ${decisionId} not found.`);
+				process.exitCode = 1;
+				return;
+			}
+			const usePlainOutput = isPlainRequested(options) || shouldAutoPlain;
+			if (usePlainOutput) {
+				console.log(content);
+				return;
+			}
+			await scrollableViewer(content);
+		} catch (error) {
+			if (isAmbiguousIdError(error)) {
+				console.error(error.message);
+				process.exitCode = 1;
+				return;
+			}
+			console.error(`Decision ${decisionId} not found.`);
+			process.exitCode = 1;
+		}
+	});
+
+addHelpSchema(decisionCmd.command("edit <decisionId>"), {
+	required: [{ name: "decisionId", type: "Decision ID", description: "Decision to update" }],
+	optional: [
+		{ name: "title", type: "String", description: "Replacement title" },
+		{ name: "status", type: "String", description: "Replacement status; free-form, as in decision create" },
+		{ name: "content", type: "Markdown", description: "Replacement body; recognized sections update the decision" },
+	],
+	writes: "Updates decision title, status, or body under the configured decisions directory",
+	output: "Updated decision ID",
+	examples: [
+		'backlog decision edit decision-1 --title "Adopt Bun test runner"',
+		"backlog decision edit decision-1 -s accepted",
+		'backlog decision edit decision-1 --content "## Context\n\nNew context"',
+	],
+})
+	.description("update a decision")
+	.option("--title <title>", "update decision title")
+	.option("-s, --status <status>", "update decision status (free-form, as in decision create)")
+	.option("--content <content>", "replace decision body; frontmatter in the content is ignored")
+	.action(async (decisionId: string, options) => {
+		const cwd = await requireProjectRoot();
+		const core = new Core(cwd);
+		const decision = await core.updateDecisionFromInput({
+			id: decisionId,
+			title: options.title,
+			status: options.status,
+			content: options.content,
+		});
+		console.log(`Updated decision ${decision.id}`);
+	});
+
 // Agents command group
 const agentsCmd = addHelpSchema(program.command("agents"), {
 	reads: "Project config and existing agent instruction files when updating",

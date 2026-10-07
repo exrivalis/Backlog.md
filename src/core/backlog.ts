@@ -11,13 +11,13 @@ import {
 	newTaskLockError,
 } from "../file-system/operations.ts";
 import { type GitBranchTip, type GitIndexEntry, GitOperations } from "../git/operations.ts";
-import { parseFrontmatter } from "../markdown/frontmatter.ts";
-import { parseTask } from "../markdown/parser.ts";
+import { parseDecision, parseTask } from "../markdown/parser.ts";
 import { assertSectionInputHasNoMarkerLines, assertValidChecklistMarks } from "../markdown/structured-sections.ts";
 import {
 	type AcceptanceCriterion,
 	type BacklogConfig,
 	type Decision,
+	type DecisionUpdateInput,
 	DOCUMENT_TYPE_VALUES,
 	type Document,
 	type DocumentCreateInput,
@@ -1220,6 +1220,17 @@ export class Core {
 		const filePath = join(this.fs.docsDir, ...relativePath.split("/"));
 		try {
 			return await Bun.file(filePath).text();
+		} catch {
+			return null;
+		}
+	}
+
+	async getDecisionContent(decisionId: string): Promise<string | null> {
+		const decision = await this.fs.loadDecision(decisionId);
+		if (!decision?.path) return null;
+
+		try {
+			return await Bun.file(join(this.fs.decisionsDir, decision.path)).text();
 		} catch {
 			return null;
 		}
@@ -3810,33 +3821,42 @@ export class Core {
 		}
 	}
 
-	async updateDecisionFromContent(decisionId: string, content: string, autoCommit?: boolean): Promise<void> {
-		const existingDecision = await this.fs.loadDecision(decisionId);
+	/**
+	 * Single validated mutation for decision title, status, and body. Only the fields present in
+	 * the input change; frontmatter inside a replacement body is ignored so callers can never
+	 * rewrite identity or metadata through raw markdown.
+	 */
+	async updateDecisionFromInput(input: DecisionUpdateInput, autoCommit?: boolean): Promise<Decision> {
+		const existingDecision = await this.fs.loadDecision(input.id);
 		if (!existingDecision) {
-			throw new Error(`Decision ${decisionId} not found`);
+			throw new Error(`Decision not found: ${input.id}`);
 		}
 
-		// Parse the markdown content to extract the decision data
-		const frontmatter = parseFrontmatter(content).data as Partial<Pick<Decision, "title" | "status" | "date">>;
+		const title = input.title?.trim();
+		if (input.title !== undefined && !title) {
+			throw new Error("Decision title cannot be empty.");
+		}
+		const status = input.status?.trim();
+		if (input.status !== undefined && !status) {
+			throw new Error("Decision status cannot be empty.");
+		}
 
-		const extractSection = (content: string, sectionName: string): string | undefined => {
-			const regex = new RegExp(`## ${sectionName}\\s*([\\s\\S]*?)(?=## |$)`, "i");
-			const match = content.match(regex);
-			return match ? match[1]?.trim() : undefined;
-		};
+		// Section extraction reuses the decision parser; its frontmatter fields (id, title,
+		// status, date) are deliberately not applied.
+		const body = input.content !== undefined ? parseDecision(input.content) : null;
 
-		const updatedDecision = {
+		const updatedDecision: Decision = {
 			...existingDecision,
-			title: frontmatter.title || existingDecision.title,
-			status: frontmatter.status || existingDecision.status,
-			date: frontmatter.date || existingDecision.date,
-			context: extractSection(content, "Context") || existingDecision.context,
-			decision: extractSection(content, "Decision") || existingDecision.decision,
-			consequences: extractSection(content, "Consequences") || existingDecision.consequences,
-			alternatives: extractSection(content, "Alternatives") || existingDecision.alternatives,
+			title: title ?? existingDecision.title,
+			status: (status ?? existingDecision.status) as Decision["status"],
+			context: body?.context || existingDecision.context,
+			decision: body?.decision || existingDecision.decision,
+			consequences: body?.consequences || existingDecision.consequences,
+			alternatives: body?.alternatives || existingDecision.alternatives,
 		};
 
 		await this.createDecision(updatedDecision, autoCommit);
+		return (await this.fs.loadDecision(input.id)) ?? updatedDecision;
 	}
 
 	async createDecisionWithTitle(title: string, autoCommit?: boolean): Promise<Decision> {

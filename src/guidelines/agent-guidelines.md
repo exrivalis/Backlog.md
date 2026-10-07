@@ -59,7 +59,7 @@ remains fully synchronized and up-to-date.
 - Markdown task files live under **`backlog/tasks/`** (drafts under **`backlog/drafts/`**)
 - Files are named: `task-<id> - <title>.md` (e.g., `task-42 - Add GraphQL resolver.md`)
 - Project documentation is in **`backlog/docs/`**
-- Project decisions are in **`backlog/decisions/`**
+- Project decisions are in **`backlog/decisions/`**; retired ADRs (rejected, superseded, archived) are historical evidence, never current guidance — `backlog decision list` and search return applicable accepted ADRs only, and `backlog decision view <id> --plain` names an old ID's authoritative replacement
 
 ### 🔧 **ACTING** (How to change things)
 
@@ -488,7 +488,7 @@ backlog search --modified-file src/server/api.ts --plain
 - Uses fuzzy matching - finds "authentication" when searching "auth"
 - Searches task titles, descriptions, and content
 - Also searches `modified_files`; `--modified-file` applies a case-insensitive path substring filter
-- Also searches documents and decisions unless filtered with `--type task`
+- Also searches documents and applicable decisions (accepted ADRs and ordinary decisions) unless filtered with `--type task`; retired ADRs surface only through `backlog decision view <id> --plain`
 - Always use `--plain` flag for AI-readable output
 
 ---

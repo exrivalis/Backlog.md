@@ -63,6 +63,7 @@ import { formatChangePreview } from "./markdown/change-document.ts";
 import { MilestoneHandlers, type MilestoneRemoveArgs } from "./mcp/tools/milestones/handlers.ts";
 import type { CallToolResult } from "./mcp/types.ts";
 import {
+	type AdrGuidanceResolution,
 	type BacklogConfig,
 	type Decision,
 	DOCUMENT_TYPE_VALUES,
@@ -5408,18 +5409,25 @@ addHelpSchema(decisionCmd.command("create <title>"), {
 	});
 
 const decisionListCommand = addHelpSchema(decisionCmd.command("list"), {
-	reads: "Decisions under the configured decisions directory",
+	reads: "Decisions under the configured decisions directory, plus the decision archive with --all",
 	writes: "None; this is a read-only command",
 	required: [],
 	optional: [
 		...LIST_WINDOW_HELP_FIELDS,
+		{ name: "all", type: "Boolean", description: "Include proposed and retired ADRs and archived records" },
 		{ name: "plain", type: "Boolean", description: "Use plain text output, which is the default for this command" },
 		{ name: "json", type: "Boolean", description: "Use versioned machine-readable JSON output" },
 	],
-	output: `Decision list with IDs, titles, and statuses, ordered by ID; versioned JSON with --json. ${LIST_WINDOW_OUTPUT_HELP}; JSON adds total and nextSkip`,
-	examples: ["backlog decision list --plain", "backlog decision list --json", "backlog decision list --max-count 20"],
-}).description("list decisions");
+	output: `Decision list with IDs, titles, and statuses, ordered by ID; applicable guidance by default, every record with --all; versioned JSON with --json. ${LIST_WINDOW_OUTPUT_HELP}; JSON adds total and nextSkip`,
+	examples: [
+		"backlog decision list --plain",
+		"backlog decision list --json",
+		"backlog decision list --all --plain",
+		"backlog decision list --max-count 20",
+	],
+}).description("list applicable decisions; --all includes proposed, retired, and archived ADRs");
 addListWindowOptions(decisionListCommand)
+	.option("--all", "include proposed and retired ADRs and archived records")
 	.option("--plain", "use plain text output")
 	.option("--json", "print versioned machine-readable JSON output")
 	.action(async (options) => {
@@ -5428,7 +5436,10 @@ addListWindowOptions(decisionListCommand)
 		const { outputMode, listWindow } = listOutput;
 		const cwd = await requireProjectRoot();
 		const core = new Core(cwd);
-		const decisions = await core.filesystem.listDecisions();
+		// Default discovery returns applicable guidance only: accepted ADRs and legacy decisions.
+		const decisions = options.all
+			? [...(await core.filesystem.listDecisions()), ...(await core.filesystem.listArchivedDecisions())]
+			: await core.listApplicableDecisions();
 
 		if (outputMode === "json") {
 			const page = selectListWindow(decisions, listWindow);
@@ -5454,24 +5465,36 @@ addHelpSchema(decisionCmd.command("view <decisionId>"), {
 	output: "Decision metadata and markdown content",
 	examples: ["backlog decision view decision-1", "backlog decision view decision-1 --plain"],
 })
-	.description("view a decision")
+	.description("view a decision; a retired ADR identifies its state and authoritative replacement")
 	.option("--plain", "use plain text output instead of interactive UI")
 	.action(async (decisionId: string, options) => {
 		const cwd = await requireProjectRoot();
 		const core = new Core(cwd);
+		// Resolved first: a retired ADR must never print as current guidance, and a broken
+		// supersession chain is a diagnosable error, not a missing record.
+		let resolution: AdrGuidanceResolution | null = null;
 		try {
-			const decision = await core.filesystem.loadDecision(decisionId);
+			resolution = await core.resolveAdrGuidance(decisionId);
+		} catch (error) {
+			console.error(error instanceof Error ? error.message : String(error));
+			process.exitCode = 1;
+			return;
+		}
+		try {
+			const decision = resolution?.decision ?? null;
 			const content = await core.getDecisionContent(decisionId);
-			if (content === null) {
+			if (content === null || !decision) {
 				console.error(`Decision ${decisionId} not found.`);
 				process.exitCode = 1;
 				return;
 			}
 			// A retired record must identify itself as history, not current guidance (doc: ADR retrieval).
 			let display = content;
-			if (decision && (decision.archived || decision.status === "superseded")) {
-				const why = decision.supersededBy ? `superseded by ${decision.supersededBy}` : decision.status;
-				display = `${decision.id} is ${decision.archived ? "archived" : "retired"} (${why}).\n\n${content}`;
+			if (resolution?.retired) {
+				const why = resolution.retired.replacement
+					? `superseded by ${resolution.retired.replacement.id}`
+					: resolution.retired.state;
+				display = `${decision.id} is ${resolution.retired.archived ? "archived" : "retired"} (${why}).\n\n${content}`;
 			}
 			const usePlainOutput = isPlainRequested(options) || shouldAutoPlain;
 			if (usePlainOutput) {
@@ -5532,7 +5555,7 @@ addHelpSchema(decisionCmd.command("supersede <supersededId> <replacementId>"), {
 		},
 	],
 	writes:
-		"Marks the superseded ADR superseded with a link to its replacement, and links the replacement back; refuses partial scope coverage, unaccepted records, and cycles",
+		"Marks the superseded ADR superseded with a link to its replacement, and links the replacement back; refuses partial scope coverage, unaccepted records, and cycles; reports current structured references left on the retired ADR",
 	output: "Superseded decision ID",
 	examples: ["backlog decision supersede decision-2 decision-3"],
 })
@@ -5542,6 +5565,15 @@ addHelpSchema(decisionCmd.command("supersede <supersededId> <replacementId>"), {
 		const core = new Core(cwd);
 		const superseded = await core.supersedeDecision(supersededId, replacementId);
 		console.log(`Superseded ${superseded.id} with ${superseded.supersededBy}`);
+		// Existing structured links are historical citations that stay readable; the requester is
+		// told which current records still cite the retired ADR so they can review them.
+		const references = await core.listActiveDecisionReferences(superseded.id);
+		if (references.length > 0) {
+			console.log(`Current structured references to ${superseded.id} (new work must cite ${superseded.supersededBy}):`);
+			for (const reference of references) {
+				console.log(`  ${reference.sourceId} - ${reference.sourceTitle} documents "${reference.value}"`);
+			}
+		}
 	});
 
 // Decision archive command: moves a retired ADR into backlog/archive/decisions, never deleting it.

@@ -8,6 +8,7 @@ import type {
 	SearchResultType,
 	Task,
 } from "../types/index.ts";
+import { isApplicableDecision } from "../utils/adr.ts";
 import {
 	buildTaskSearchFields,
 	createTaskFilterMatcher,
@@ -171,7 +172,9 @@ export class SearchService {
 			document,
 		}));
 
-		this.decisions = decisions.map((decision) => ({
+		// Search is default guidance discovery: proposed and retired ADRs stay out of results, and
+		// archived ADRs never enter the store. Explicit historical lookup goes through decision view.
+		this.decisions = decisions.filter(isApplicableDecision).map((decision) => ({
 			...EMPTY_TASK_SEARCH_FIELDS,
 			id: decision.id,
 			type: "decision",

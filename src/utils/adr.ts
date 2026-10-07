@@ -11,6 +11,27 @@ export function isRetiredAdrStatus(status: string): boolean {
 	return status !== "proposed" && status !== "accepted";
 }
 
+/** An ADR that no longer governs current work; legacy decisions are never retired by status. */
+export function isRetiredAdr(decision: Pick<Decision, "kind" | "status">): boolean {
+	return isAdr(decision) && isRetiredAdrStatus(decision.status);
+}
+
+/** One predicate for default guidance discovery: legacy decisions and accepted ADRs only. */
+export function isApplicableDecision(decision: Pick<Decision, "kind" | "status">): boolean {
+	return !isAdr(decision) || decision.status === "accepted";
+}
+
+/**
+ * A documentation entry counts as a structured decision link only when it is spelled as a decision
+ * ID. Anything else (URL, path, prose) is a citation no validator can classify, mirroring the
+ * document-link rule in deletion-preview.
+ */
+const DECISION_ID_REFERENCE_PATTERN = /^decision-\d+(?:\.\d+)*$/i;
+
+export function isDecisionIdReference(entry: string): boolean {
+	return DECISION_ID_REFERENCE_PATTERN.test(entry.trim());
+}
+
 /** Terminal states: a rejected or superseded ADR no longer accepts status changes. */
 const ADR_TRANSITIONS: Record<AdrStatus, readonly AdrStatus[]> = {
 	proposed: ["accepted", "rejected"],

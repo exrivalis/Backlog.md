@@ -74,10 +74,14 @@ describe("CLI architecture decision records (ADRs)", () => {
 		expect(view.stdout.toString()).toContain("kind: architecture");
 		expect(view.stdout.toString()).toContain("## Scope");
 
+		// Default discovery returns applicable guidance only, so a proposed ADR needs --all.
 		const list = await $`bun ${CLI_PATH} decision list --json`.cwd(TEST_DIR).quiet();
 		const parsed = JSON.parse(list.stdout.toString());
-		expect(parsed.decisions).toHaveLength(1);
-		expect(parsed.decisions[0].kind).toBe("architecture");
+		expect(parsed.decisions).toHaveLength(0);
+		const listAll = await $`bun ${CLI_PATH} decision list --all --json`.cwd(TEST_DIR).quiet();
+		const parsedAll = JSON.parse(listAll.stdout.toString());
+		expect(parsedAll.decisions).toHaveLength(1);
+		expect(parsedAll.decisions[0].kind).toBe("architecture");
 
 		const legacy = await $`bun ${CLI_PATH} decision create "Team offsite schedule"`.cwd(TEST_DIR).quiet();
 		expect(legacy.exitCode).toBe(0);

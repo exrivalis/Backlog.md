@@ -3474,6 +3474,44 @@ export class Core {
 		return result;
 	}
 
+	async editMilestoneDescription(
+		identifier: string,
+		description: string | null,
+		autoCommit?: boolean,
+	): Promise<{
+		success: boolean;
+		filepath?: string;
+		milestone?: Milestone;
+		previousDescription?: string;
+	}> {
+		const result = await this.fs.updateMilestoneDescription(identifier, description);
+		if (!result.success) {
+			return result;
+		}
+
+		if (result.filepath && (await this.shouldAutoCommit(autoCommit))) {
+			const label = result.milestone?.id ? ` ${result.milestone.id}` : "";
+			const commitPaths = [result.filepath];
+			try {
+				await this.git.addFile(result.filepath);
+				await this.git.commitFiles(`backlog: Edit milestone description${label}`, commitPaths);
+			} catch (error) {
+				await this.git.resetPaths(commitPaths);
+				try {
+					await this.fs.updateMilestoneDescription(
+						result.milestone?.id ?? identifier,
+						result.previousDescription ?? null,
+					);
+				} catch {
+					// Ignore rollback failure and propagate original commit error.
+				}
+				throw error;
+			}
+		}
+
+		return result;
+	}
+
 	async completeTask(taskId: string, autoCommit?: boolean, options: TaskReadOptions = {}): Promise<boolean> {
 		const task = await this.loadTaskForMutation(taskId, options);
 		if (!task) return false;

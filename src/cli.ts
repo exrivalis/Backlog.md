@@ -4418,6 +4418,42 @@ addHelpSchema(milestoneCmd.command("rename <from> <to>"), {
 		},
 	);
 
+addHelpSchema(milestoneCmd.command("edit <name>"), {
+	reads: "Active milestone files for identity resolution",
+	required: [{ name: "name", type: "Milestone ID or title", description: "Active milestone to edit" }],
+	optional: [
+		{ name: "description", type: "Markdown", description: "Replace the milestone description" },
+		{ name: "clear-description", type: "Boolean", description: "Clear the milestone description" },
+	],
+	writes: "Rewrites the milestone markdown file; ID, title, due date, and linked tasks are unchanged",
+	output: "Edit summary",
+	examples: [
+		'backlog milestone edit m-1 --description "New release scope"',
+		'backlog milestone edit "Release 1.0" --clear-description',
+	],
+})
+	.description("replace or clear a milestone description")
+	.option("-d, --description <text>", "replace the milestone description")
+	.option("--clear-description", "clear the milestone description")
+	.action(async (name: string, options: { description?: string; clearDescription?: boolean }) => {
+		if (options.description !== undefined && options.clearDescription) {
+			console.error("Cannot use --description and --clear-description together.");
+			process.exitCode = 1;
+			return;
+		}
+		if (options.description === undefined && !options.clearDescription) {
+			console.error("Nothing to edit: pass --description <text> or --clear-description.");
+			process.exitCode = 1;
+			return;
+		}
+		await runMilestoneMutation((handlers) =>
+			handlers.editMilestone({
+				name,
+				description: options.clearDescription ? null : options.description,
+			}),
+		);
+	});
+
 addHelpSchema(milestoneCmd.command("remove <name>"), {
 	reads: "Active and archived milestone files, plus local tasks unless task handling is keep",
 	required: [{ name: "name", type: "Milestone ID or title", description: "Active milestone to remove" }],

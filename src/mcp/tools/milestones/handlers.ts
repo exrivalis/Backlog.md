@@ -26,6 +26,11 @@ export type MilestoneRenameArgs = {
 	dueDate?: string | null;
 };
 
+export type MilestoneEditArgs = {
+	name: string;
+	description?: string | null;
+};
+
 export type MilestoneRemoveArgs = {
 	name: string;
 	taskHandling?: "clear" | "keep" | "reassign";
@@ -556,6 +561,62 @@ export class MilestoneHandlers {
 				{
 					type: "text",
 					text: summaryLines.join("\n"),
+				},
+			],
+		};
+	}
+
+	async editMilestone(args: MilestoneEditArgs): Promise<CallToolResult> {
+		const name = normalizeMilestoneName(args.name);
+		if (!name) {
+			throw new BacklogToolError("Milestone name cannot be empty.", "VALIDATION_ERROR");
+		}
+		if (args.description === undefined) {
+			throw new BacklogToolError(
+				"Provide a description to set, or clearDescription to clear the milestone description.",
+				"VALIDATION_ERROR",
+			);
+		}
+
+		const fileMilestones = await this.listFileMilestones();
+		const sourceMilestone = findActiveMilestoneByAlias(name, fileMilestones);
+		if (!sourceMilestone) {
+			throw new BacklogToolError(`Milestone not found: "${name}"`, "NOT_FOUND");
+		}
+
+		const requested = args.description === null ? null : args.description.trim();
+		const nextDescription = requested ? requested : null;
+		const unchanged =
+			nextDescription === null
+				? sourceMilestone.description === `Milestone: ${sourceMilestone.title}`
+				: sourceMilestone.description === nextDescription;
+		if (unchanged) {
+			return {
+				content: [
+					{
+						type: "text",
+						text: `Milestone "${sourceMilestone.title}" (${sourceMilestone.id}) description is already up to date. No changes made.`,
+					},
+				],
+			};
+		}
+
+		const result = await this.core.editMilestoneDescription(sourceMilestone.id, nextDescription);
+		if (!result.success || !result.milestone) {
+			throw new BacklogToolError(
+				`Failed to update the description of milestone "${sourceMilestone.title}" (${sourceMilestone.id}).`,
+				"INTERNAL_ERROR",
+			);
+		}
+
+		return {
+			content: [
+				{
+					type: "text",
+					text:
+						nextDescription === null
+							? `Cleared description for milestone "${sourceMilestone.title}" (${sourceMilestone.id}).`
+							: `Updated description for milestone "${sourceMilestone.title}" (${sourceMilestone.id}).`,
 				},
 			],
 		};

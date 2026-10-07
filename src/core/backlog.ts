@@ -39,6 +39,14 @@ import {
 	type TaskListFilter,
 	type TaskUpdateInput,
 } from "../types/index.ts";
+import {
+	ADR_KIND,
+	assertAdrAcceptableFields,
+	assertAdrStatusValue,
+	assertAdrTransition,
+	isAdr,
+	scopeCoverageGaps,
+} from "../utils/adr.ts";
 import { normalizeAssignee } from "../utils/assignee.ts";
 import { decisionIdKey } from "../utils/decision-id.ts";
 import { documentIdKey, findDocumentById, normalizeDocumentId } from "../utils/document-id.ts";
@@ -3933,12 +3941,28 @@ export class Core {
 		}
 	}
 
-	async createDecision(decision: Decision, autoCommit?: boolean): Promise<void> {
+	async createDecision(
+		decision: Decision,
+		autoCommit?: boolean,
+	): Promise<{ filepath: string; removedFilepaths: string[] }> {
+		// Architecture decisions (kind: architecture) carry a validated lifecycle; legacy decisions stay free-form.
+		if (decision.kind !== undefined && decision.kind !== ADR_KIND) {
+			throw new Error(`Unsupported decision kind '${decision.kind}'. Supported kinds: ${ADR_KIND}.`);
+		}
+		if (isAdr(decision)) {
+			assertAdrStatusValue(decision.id, decision.status);
+			if (decision.status === "accepted") {
+				assertAdrAcceptableFields(decision);
+			}
+		}
+
 		const { filepath, removedFilepaths } = await this.fs.saveDecision(decision);
 
 		if (await this.shouldAutoCommit(autoCommit)) {
 			await this.commitWrittenFile(`backlog: Add decision ${decision.id}`, removedFilepaths, filepath);
 		}
+
+		return { filepath, removedFilepaths };
 	}
 
 	/**
@@ -3960,6 +3984,10 @@ export class Core {
 		if (input.status !== undefined && !status) {
 			throw new Error("Decision status cannot be empty.");
 		}
+		if (isAdr(existingDecision) && status !== undefined) {
+			assertAdrStatusValue(existingDecision.id, status);
+			assertAdrTransition(existingDecision.id, existingDecision.status, status);
+		}
 
 		// Section extraction reuses the decision parser; its frontmatter fields (id, title,
 		// status, date) are deliberately not applied.
@@ -3973,6 +4001,8 @@ export class Core {
 			decision: body?.decision || existingDecision.decision,
 			consequences: body?.consequences || existingDecision.consequences,
 			alternatives: body?.alternatives || existingDecision.alternatives,
+			scope: body?.scope || existingDecision.scope,
+			rationale: body?.rationale || existingDecision.rationale,
 		};
 
 		await this.createDecision(updatedDecision, autoCommit);
@@ -3995,6 +4025,108 @@ export class Core {
 
 		await this.createDecision(decision, autoCommit);
 		return decision;
+	}
+
+	/**
+	 * Retires an accepted ADR in favor of an accepted replacement in one reviewed operation. The
+	 * replacement must be an accepted ADR that has not superseded another record, must cover the
+	 * full scope of the ADR it replaces, and must not close a supersession cycle; otherwise the
+	 * retirement is refused and still-applicable guidance stays authoritative. The older ADR keeps
+	 * its text and gains historical links in both directions.
+	 */
+	async supersedeDecision(supersededId: string, replacementId: string, autoCommit?: boolean): Promise<Decision> {
+		const superseded = await this.fs.loadDecision(supersededId);
+		if (!superseded) {
+			throw new Error(`Decision not found: ${supersededId}`);
+		}
+		const replacement = await this.fs.loadDecision(replacementId);
+		if (!replacement) {
+			throw new Error(`Decision not found: ${replacementId}`);
+		}
+
+		if (decisionIdKey(superseded.id) === decisionIdKey(replacement.id)) {
+			throw new Error("An architecture decision cannot supersede itself.");
+		}
+		if (!isAdr(superseded)) {
+			throw new Error(
+				`Decision ${superseded.id} is not an architecture decision record (kind: ${ADR_KIND}); only ADRs can be superseded.`,
+			);
+		}
+		if (!isAdr(replacement)) {
+			throw new Error(
+				`Decision ${replacement.id} is not an architecture decision record (kind: ${ADR_KIND}); only ADRs can be the replacement.`,
+			);
+		}
+		if (superseded.status !== "accepted") {
+			const reason =
+				superseded.status === "proposed"
+					? "reject it instead"
+					: superseded.status === "superseded" && superseded.supersededBy
+						? `already superseded by ${superseded.supersededBy}`
+						: "already retired";
+			throw new Error(`Only an accepted ADR can be superseded; ${superseded.id} is ${superseded.status} (${reason}).`);
+		}
+		if (replacement.status !== "accepted") {
+			throw new Error(
+				`The replacement ${replacement.id} must be accepted before superseding ${superseded.id}; it is ${replacement.status}.`,
+			);
+		}
+		if (replacement.supersedes || replacement.supersededBy) {
+			const existingLink = replacement.supersedes ?? replacement.supersededBy;
+			throw new Error(
+				`The replacement ${replacement.id} already records a supersession link with ${existingLink}; use an accepted ADR that has not superseded another record.`,
+			);
+		}
+		await this.assertNoSupersessionCycle(superseded, replacement);
+
+		const gaps = scopeCoverageGaps(superseded.scope, replacement.scope);
+		if (gaps.length > 0) {
+			throw new Error(
+				`Refusing to supersede ${superseded.id}: ${replacement.id} does not cover its full scope. ` +
+					`Unresolved scope: ${gaps.join("; ")}. Resolve the remaining scope before superseding.`,
+			);
+		}
+
+		// Link the replacement first so an interrupted run never leaves a retired ADR without a replacement.
+		const { filepath: replacementFilepath, removedFilepaths: replacementRemoved } = await this.createDecision(
+			{ ...replacement, supersedes: superseded.id },
+			false,
+		);
+		const retired: Decision = { ...superseded, status: "superseded", supersededBy: replacement.id };
+		const { filepath: retiredFilepath, removedFilepaths: retiredRemoved } = await this.createDecision(retired, false);
+
+		if (await this.shouldAutoCommit(autoCommit)) {
+			await this.commitWrittenFile(
+				`backlog: Supersede ${superseded.id} with ${replacement.id}`,
+				retiredRemoved,
+				retiredFilepath,
+				[replacementFilepath, ...replacementRemoved],
+			);
+		}
+
+		return (await this.fs.loadDecision(superseded.id)) ?? retired;
+	}
+
+	/** Walks the supersedes chain from the ADR being retired; a path back to the replacement would close a cycle. */
+	private async assertNoSupersessionCycle(superseded: Decision, replacement: Decision): Promise<void> {
+		const visited = new Set<string>([superseded.id]);
+		let current: Decision | null = superseded;
+		while (current?.supersedes) {
+			const nextId = current.supersedes;
+			if (decisionIdKey(nextId) === decisionIdKey(replacement.id)) {
+				throw new Error(
+					`Superseding ${superseded.id} with ${replacement.id} would create a supersession cycle through ${nextId}.`,
+				);
+			}
+			if (visited.has(nextId)) {
+				throw new Error(
+					`The supersession links around ${superseded.id} already form a cycle; resolve them before superseding.`,
+				);
+			}
+			visited.add(nextId);
+			// A broken link simply ends the chain; only a path back to the replacement closes a cycle.
+			current = await this.fs.loadDecision(nextId);
+		}
 	}
 
 	async createDocument(doc: Document, autoCommit?: boolean, subPath = ""): Promise<void> {

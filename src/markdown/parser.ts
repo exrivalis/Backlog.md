@@ -249,6 +249,11 @@ export function parseDecision(content: string): Decision {
 		decision: extractSection(rawContent, "Decision") || "",
 		consequences: extractSection(rawContent, "Consequences") || "",
 		alternatives: extractSection(rawContent, "Alternatives"),
+		kind: frontmatter.kind ? (String(frontmatter.kind) as Decision["kind"]) : undefined,
+		scope: extractSection(rawContent, "Scope"),
+		rationale: extractSection(rawContent, "Rationale"),
+		supersedes: frontmatter.supersedes ? String(frontmatter.supersedes) : undefined,
+		supersededBy: frontmatter.superseded_by ? String(frontmatter.superseded_by) : undefined,
 		rawContent, // Raw markdown content without frontmatter
 	};
 }
@@ -282,7 +287,9 @@ export function parseMilestone(content: string): Milestone {
 function extractSection(content: string, sectionTitle: string): string | undefined {
 	// Normalize to LF for reliable matching across platforms
 	const src = content.replace(/\r\n/g, "\n");
-	const regex = new RegExp(`## ${sectionTitle}\\s*\\n([\\s\\S]*?)(?=\\n## |$)`, "i");
+	// Only spaces and tabs may follow the heading on its own line: letting \s* cross newlines makes
+	// an empty section swallow the next heading as its content.
+	const regex = new RegExp(`## ${sectionTitle}[ \\t]*\\n([\\s\\S]*?)(?=\\n## |$)`, "i");
 	const match = src.match(regex);
 	return match?.[1]?.trim();
 }

@@ -5155,20 +5155,32 @@ addHelpSchema(decisionCmd.command("create <title>"), {
 	required: [{ name: "title", type: "String", description: "Decision title" }],
 	optional: [
 		{ name: "status", type: "String", description: "Decision status; free-form, defaults to proposed" },
+		{
+			name: "kind",
+			type: "String",
+			description: "Record kind; 'architecture' records an ADR with a validated lifecycle",
+		},
+		{ name: "scope", type: "String", description: "Scope the ADR governs, as comma-separated items" },
 		{ name: "plain", type: "Boolean", description: "Use plain text output" },
 	],
 	writes: "Creates a decision markdown file under the configured decisions directory",
 	output: "Created decision ID",
-	examples: ['backlog decision create "Adopt Bun test runner" -s accepted --plain'],
+	examples: [
+		'backlog decision create "Adopt Bun test runner" -s accepted --plain',
+		'backlog decision create "Use SQLite for sessions" --kind architecture --scope "session storage" --plain',
+	],
 })
 	.description("create a decision")
 	.option("-s, --status <status>", "set decision status (free-form, defaults to proposed)")
+	.option("--kind <kind>", "record kind; use 'architecture' to record an ADR")
+	.option("--scope <scope>", "scope an architecture decision governs, as comma-separated items")
 	// Accepted so agent guidance that always passes --plain works; create output is already plain text.
 	.option("--plain", "use plain text output")
 	.action(async (title: string, options) => {
 		const cwd = await requireProjectRoot();
 		const core = new Core(cwd);
 		const id = await generateNextDecisionId(core);
+		const kind = options.kind?.trim() || undefined;
 		const decision: Decision = {
 			id,
 			title: title as string,
@@ -5177,6 +5189,8 @@ addHelpSchema(decisionCmd.command("create <title>"), {
 			context: "",
 			decision: "",
 			consequences: "",
+			...(kind && { kind: kind as Decision["kind"] }),
+			...(options.scope && { scope: options.scope }),
 			rawContent: "",
 		};
 		await core.createDecision(decision);
@@ -5288,6 +5302,29 @@ addHelpSchema(decisionCmd.command("edit <decisionId>"), {
 			content: options.content,
 		});
 		console.log(`Updated decision ${decision.id}`);
+	});
+
+// Decision supersede command: retires an accepted ADR in one reviewed operation.
+addHelpSchema(decisionCmd.command("supersede <supersededId> <replacementId>"), {
+	required: [
+		{ name: "supersededId", type: "Decision ID", description: "Accepted ADR to retire" },
+		{
+			name: "replacementId",
+			type: "Decision ID",
+			description: "Accepted ADR that replaces it; must cover the retired ADR's full scope",
+		},
+	],
+	writes:
+		"Marks the superseded ADR superseded with a link to its replacement, and links the replacement back; refuses partial scope coverage, unaccepted records, and cycles",
+	output: "Superseded decision ID",
+	examples: ["backlog decision supersede decision-2 decision-3"],
+})
+	.description("supersede an accepted ADR with an accepted replacement")
+	.action(async (supersededId: string, replacementId: string) => {
+		const cwd = await requireProjectRoot();
+		const core = new Core(cwd);
+		const superseded = await core.supersedeDecision(supersededId, replacementId);
+		console.log(`Superseded ${superseded.id} with ${superseded.supersededBy}`);
 	});
 
 // Agents command group

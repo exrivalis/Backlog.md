@@ -326,6 +326,63 @@ Some context.`;
 			expect(decision.consequences).toBe("");
 			expect(decision.alternatives).toBeUndefined();
 		});
+
+		it("should keep empty sections from swallowing the next heading", () => {
+			const content = `---
+id: decision-4
+title: "Empty sections"
+date: "2025-06-03"
+status: "proposed"
+---
+
+## Context
+
+## Decision
+
+Use SQLite.
+
+## Scope
+
+session storage`;
+
+			const decision = parseDecision(content);
+
+			expect(decision.context).toBe("");
+			expect(decision.decision).toBe("Use SQLite.");
+			expect(decision.scope).toBe("session storage");
+		});
+
+		it("should parse ADR kind, rationale, and supersession links", () => {
+			const content = `---
+id: decision-5
+title: "Use SQLite"
+date: "2025-06-03"
+status: "superseded"
+kind: architecture
+supersedes: decision-4
+superseded_by: decision-6
+---
+
+## Decision
+
+Use SQLite.
+
+## Rationale
+
+Cheap and embedded.
+
+## Scope
+
+session storage`;
+
+			const decision = parseDecision(content);
+
+			expect(decision.kind).toBe("architecture");
+			expect(decision.rationale).toBe("Cheap and embedded.");
+			expect(decision.scope).toBe("session storage");
+			expect(decision.supersedes).toBe("decision-4");
+			expect(decision.supersededBy).toBe("decision-6");
+		});
 	});
 
 	describe("parseDocument", () => {
@@ -797,6 +854,32 @@ describe("Markdown Serializer", () => {
 
 			expect(result).toContain("## Alternatives");
 			expect(result).toContain("Considered MongoDB");
+		});
+
+		it("should serialize ADR frontmatter and sections", () => {
+			const decision: Decision = {
+				id: "decision-3",
+				title: "Use SQLite",
+				date: "2025-06-03",
+				status: "superseded",
+				context: "Sessions must persist",
+				decision: "Use SQLite",
+				consequences: "Single-writer",
+				kind: "architecture",
+				rationale: "Cheap and embedded",
+				scope: "session storage",
+				supersededBy: "decision-4",
+				rawContent: "",
+			};
+
+			const result = serializeDecision(decision);
+
+			expect(result).toContain("kind: architecture");
+			expect(result).toContain("superseded_by: decision-4");
+			expect(result).not.toContain("supersedes:");
+			expect(result).toContain("## Rationale");
+			expect(result).toContain("## Scope");
+			expect(result).toContain("session storage");
 		});
 	});
 

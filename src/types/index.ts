@@ -227,6 +227,14 @@ export interface Decision {
 	decision: string;
 	consequences: string;
 	alternatives?: string;
+	/** Record kind; "architecture" marks an ADR. Legacy decisions have no kind and stay free-form. */
+	kind?: "architecture";
+	/** What the decision governs, as comma/semicolon/newline separated scope items. */
+	scope?: string;
+	rationale?: string;
+	/** Supersession links: the replacement an ADR was retired for, and the ADR a replacement retired. */
+	supersedes?: string;
+	supersededBy?: string;
 	readonly rawContent: string; // Raw markdown content without frontmatter
 	path?: string; // Decisions-relative file path, set when listed from disk
 }

@@ -108,6 +108,7 @@ type DecisionSummaryJson = {
 	title: string;
 	status: Decision["status"];
 	date: string | null;
+	kind?: Decision["kind"];
 };
 
 type SearchResultJson =
@@ -232,6 +233,7 @@ function toDecisionSummaryJson(decision: Decision): DecisionSummaryJson {
 		title: decision.title,
 		status: decision.status,
 		date: normalizePublicDate(decision.date),
+		...(decision.kind && { kind: decision.kind }),
 	};
 }
 

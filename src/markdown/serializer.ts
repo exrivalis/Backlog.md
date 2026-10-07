@@ -138,6 +138,9 @@ export function serializeDecision(decision: Decision): string {
 		title: decision.title,
 		date: decision.date,
 		status: decision.status,
+		...(decision.kind && { kind: decision.kind }),
+		...(decision.supersedes && { supersedes: decision.supersedes }),
+		...(decision.supersededBy && { superseded_by: decision.supersededBy }),
 	};
 
 	let content = `## Context\n\n${decision.context}\n\n`;
@@ -146,6 +149,12 @@ export function serializeDecision(decision: Decision): string {
 
 	if (decision.alternatives) {
 		content += `\n\n## Alternatives\n\n${decision.alternatives}`;
+	}
+	if (decision.rationale) {
+		content += `\n\n## Rationale\n\n${decision.rationale}`;
+	}
+	if (decision.scope) {
+		content += `\n\n## Scope\n\n${decision.scope}`;
 	}
 
 	return stringifyFrontmatter(content, frontmatter);

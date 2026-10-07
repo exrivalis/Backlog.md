@@ -46,6 +46,7 @@ import {
 	assertAdrStatusValue,
 	assertAdrTransition,
 	isAdr,
+	isRetiredAdrStatus,
 	scopeCoverageGaps,
 } from "../utils/adr.ts";
 import { normalizeAssignee } from "../utils/assignee.ts";
@@ -1287,8 +1288,9 @@ export class Core {
 		const decision = await this.fs.loadDecision(decisionId);
 		if (!decision?.path) return null;
 
+		const baseDir = decision.archived ? this.fs.archiveDecisionsDir : this.fs.decisionsDir;
 		try {
-			return await Bun.file(join(this.fs.decisionsDir, decision.path)).text();
+			return await Bun.file(join(baseDir, decision.path)).text();
 		} catch {
 			return null;
 		}
@@ -4252,6 +4254,11 @@ export class Core {
 		if (!existingDecision) {
 			throw new Error(`Decision not found: ${input.id}`);
 		}
+		if (existingDecision.archived) {
+			throw new Error(
+				`Decision ${existingDecision.id} is archived; restore it with 'backlog decision restore' before editing.`,
+			);
+		}
 
 		const title = input.title?.trim();
 		if (input.title !== undefined && !title) {
@@ -4404,6 +4411,65 @@ export class Core {
 			// A broken link simply ends the chain; only a path back to the replacement closes a cycle.
 			current = await this.fs.loadDecision(nextId);
 		}
+	}
+
+	/**
+	 * Moves a retired ADR to backlog/archive/decisions. Only a rejected, deprecated, or superseded
+	 * ADR may archive; an applicable accepted ADR must go through a valid lifecycle transition
+	 * (supersession) first, and a proposal can only be rejected. The move is whole-file, so
+	 * identity, content, and supersession links survive; archive is never a delete or purge.
+	 */
+	async archiveDecision(decisionId: string, autoCommit?: boolean): Promise<Decision> {
+		const decision = await this.fs.loadDecision(decisionId);
+		if (!decision) {
+			throw new Error(`Decision not found: ${decisionId}`);
+		}
+		if (decision.archived) {
+			throw new Error(`Decision ${decision.id} is already archived.`);
+		}
+		if (!isAdr(decision)) {
+			throw new Error(
+				`Decision ${decision.id} is not an architecture decision record (kind: ${ADR_KIND}); only ADRs can be archived.`,
+			);
+		}
+		if (!isRetiredAdrStatus(decision.status)) {
+			const hint =
+				decision.status === "accepted"
+					? "An accepted ADR is still applicable; supersede it with 'backlog decision supersede' before archiving."
+					: "A proposed ADR is not retired; reject it instead.";
+			throw new Error(
+				`Cannot archive ${decision.id}: only a rejected, deprecated, or superseded ADR can be archived. ${hint}`,
+			);
+		}
+
+		const { sourcePath, targetPath } = await this.fs.moveDecisionToArchive(decision.id);
+
+		if (await this.shouldAutoCommit(autoCommit)) {
+			const repoRoot = await this.git.stageFileMove(sourcePath, targetPath);
+			await this.git.commitFiles(`backlog: Archive decision ${decision.id}`, [sourcePath, targetPath], repoRoot);
+		}
+
+		return (await this.fs.loadDecision(decision.id)) ?? decision;
+	}
+
+	/** Moves an archived ADR back to backlog/decisions; the record and its content are unchanged. */
+	async restoreDecision(decisionId: string, autoCommit?: boolean): Promise<Decision> {
+		const decision = await this.fs.loadDecision(decisionId);
+		if (!decision) {
+			throw new Error(`Decision not found: ${decisionId}`);
+		}
+		if (!decision.archived) {
+			throw new Error(`Decision ${decision.id} is not archived.`);
+		}
+
+		const { sourcePath, targetPath } = await this.fs.moveDecisionFromArchive(decision.id);
+
+		if (await this.shouldAutoCommit(autoCommit)) {
+			const repoRoot = await this.git.stageFileMove(sourcePath, targetPath);
+			await this.git.commitFiles(`backlog: Restore decision ${decision.id}`, [sourcePath, targetPath], repoRoot);
+		}
+
+		return (await this.fs.loadDecision(decision.id)) ?? decision;
 	}
 
 	async createDocument(doc: Document, autoCommit?: boolean, subPath = ""): Promise<void> {

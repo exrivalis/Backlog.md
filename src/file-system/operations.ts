@@ -375,6 +375,10 @@ export class FileSystem {
 		return join(this.resolvedBacklogDir, DEFAULT_DIRECTORIES.DECISIONS);
 	}
 
+	get archiveDecisionsDir(): string {
+		return join(this.resolvedBacklogDir, DEFAULT_DIRECTORIES.ARCHIVE_DECISIONS);
+	}
+
 	get docsDir(): string {
 		return join(this.resolvedBacklogDir, DEFAULT_DIRECTORIES.DOCS);
 	}
@@ -501,6 +505,11 @@ export class FileSystem {
 		return join(backlogDir, DEFAULT_DIRECTORIES.DECISIONS);
 	}
 
+	private async getArchiveDecisionsDir(): Promise<string> {
+		const backlogDir = await this.getBacklogDir();
+		return join(backlogDir, DEFAULT_DIRECTORIES.ARCHIVE_DECISIONS);
+	}
+
 	private async getDocsDir(): Promise<string> {
 		const backlogDir = await this.getBacklogDir();
 		return join(backlogDir, DEFAULT_DIRECTORIES.DOCS);
@@ -529,6 +538,7 @@ export class FileSystem {
 			join(backlogDir, DEFAULT_DIRECTORIES.ARCHIVE_MILESTONES),
 			join(backlogDir, DEFAULT_DIRECTORIES.DOCS),
 			join(backlogDir, DEFAULT_DIRECTORIES.DECISIONS),
+			join(backlogDir, DEFAULT_DIRECTORIES.ARCHIVE_DECISIONS),
 		];
 
 		for (const dir of directories) {
@@ -1512,8 +1522,13 @@ export class FileSystem {
 		return { filepath, removedFilepaths };
 	}
 
+	/**
+	 * Resolves a decision by exact ID across the active and archived directories, so historical
+	 * lookups keep working after a move. An ID present in both fails closed as ambiguous.
+	 */
 	async loadDecision(decisionId: string): Promise<Decision | null> {
-		return findDecisionById(await this.listDecisions(), decisionId);
+		const [active, archived] = await Promise.all([this.listDecisions(), this.listArchivedDecisions()]);
+		return findDecisionById([...active, ...archived], decisionId);
 	}
 
 	// Document operations
@@ -1581,10 +1596,18 @@ export class FileSystem {
 
 	/** Lists decisions, skipping files that cannot be read or parsed and collecting their paths in `unreadable`. */
 	async listDecisions(unreadable?: string[]): Promise<Decision[]> {
+		return this.listDecisionsInDir(await this.getDecisionsDir(), false, unreadable);
+	}
+
+	/** Lists decisions moved to backlog/archive/decisions, each marked `archived`. */
+	async listArchivedDecisions(unreadable?: string[]): Promise<Decision[]> {
+		return this.listDecisionsInDir(await this.getArchiveDecisionsDir(), true, unreadable);
+	}
+
+	private async listDecisionsInDir(dir: string, archived: boolean, unreadable?: string[]): Promise<Decision[]> {
 		try {
-			const decisionsDir = await this.getDecisionsDir();
 			const decisionFiles = await Array.fromAsync(
-				new Bun.Glob("decision-*.md").scan({ cwd: decisionsDir, followSymlinks: true }),
+				new Bun.Glob("decision-*.md").scan({ cwd: dir, followSymlinks: true }),
 			);
 			const decisions: Decision[] = [];
 			for (const file of decisionFiles) {
@@ -1592,10 +1615,10 @@ export class FileSystem {
 				if (file.toLowerCase().match(/^readme\.md$/i)) {
 					continue;
 				}
-				const filepath = join(decisionsDir, file);
+				const filepath = join(dir, file);
 				try {
 					const content = await Bun.file(filepath).text();
-					decisions.push({ ...parseDecision(content), path: file });
+					decisions.push({ ...parseDecision(content), path: file, ...(archived && { archived: true }) });
 				} catch {
 					// One malformed file must not hide every other decision from lookups.
 					unreadable?.push(file);
@@ -1606,6 +1629,56 @@ export class FileSystem {
 			recordUnreadableDirectory(error, unreadable);
 			return [];
 		}
+	}
+
+	/**
+	 * Moves one decision file to backlog/archive/decisions. The move is whole-file: identity,
+	 * content, and supersession links are untouched. An existing archive file is a collision,
+	 * not an overwrite.
+	 */
+	async moveDecisionToArchive(decisionId: string): Promise<{ sourcePath: string; targetPath: string }> {
+		const decision = findDecisionById(await this.listDecisions(), decisionId);
+		if (!decision?.path) {
+			throw new Error(`Decision not found in backlog/decisions: ${decisionId}`);
+		}
+		const sourcePath = join(await this.getDecisionsDir(), decision.path);
+		const targetPath = join(await this.getArchiveDecisionsDir(), basename(decision.path));
+		if (
+			await stat(targetPath).then(
+				() => true,
+				() => false,
+			)
+		) {
+			throw new Error(
+				`Cannot archive ${decision.id}: '${basename(decision.path)}' already exists in backlog/archive/decisions.`,
+			);
+		}
+		await this.ensureDirectoryExists(dirname(targetPath));
+		await rename(sourcePath, targetPath);
+		return { sourcePath, targetPath };
+	}
+
+	/** Moves one archived decision file back to backlog/decisions; the file content is unchanged. */
+	async moveDecisionFromArchive(decisionId: string): Promise<{ sourcePath: string; targetPath: string }> {
+		const decision = findDecisionById(await this.listArchivedDecisions(), decisionId);
+		if (!decision?.path) {
+			throw new Error(`Decision not found in backlog/archive/decisions: ${decisionId}`);
+		}
+		const sourcePath = join(await this.getArchiveDecisionsDir(), decision.path);
+		const targetPath = join(await this.getDecisionsDir(), basename(decision.path));
+		if (
+			await stat(targetPath).then(
+				() => true,
+				() => false,
+			)
+		) {
+			throw new Error(
+				`Cannot restore ${decision.id}: '${basename(decision.path)}' already exists in backlog/decisions.`,
+			);
+		}
+		await this.ensureDirectoryExists(dirname(targetPath));
+		await rename(sourcePath, targetPath);
+		return { sourcePath, targetPath };
 	}
 
 	/** Lists documents, skipping files that cannot be read or parsed and collecting their paths in `unreadable`. */

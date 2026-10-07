@@ -5417,18 +5417,25 @@ addHelpSchema(decisionCmd.command("view <decisionId>"), {
 		const cwd = await requireProjectRoot();
 		const core = new Core(cwd);
 		try {
+			const decision = await core.filesystem.loadDecision(decisionId);
 			const content = await core.getDecisionContent(decisionId);
 			if (content === null) {
 				console.error(`Decision ${decisionId} not found.`);
 				process.exitCode = 1;
 				return;
 			}
+			// A retired record must identify itself as history, not current guidance (doc: ADR retrieval).
+			let display = content;
+			if (decision && (decision.archived || decision.status === "superseded")) {
+				const why = decision.supersededBy ? `superseded by ${decision.supersededBy}` : decision.status;
+				display = `${decision.id} is ${decision.archived ? "archived" : "retired"} (${why}).\n\n${content}`;
+			}
 			const usePlainOutput = isPlainRequested(options) || shouldAutoPlain;
 			if (usePlainOutput) {
-				console.log(content);
+				console.log(display);
 				return;
 			}
-			await scrollableViewer(content);
+			await scrollableViewer(display);
 		} catch (error) {
 			if (isAmbiguousIdError(error)) {
 				console.error(error.message);
@@ -5492,6 +5499,37 @@ addHelpSchema(decisionCmd.command("supersede <supersededId> <replacementId>"), {
 		const core = new Core(cwd);
 		const superseded = await core.supersedeDecision(supersededId, replacementId);
 		console.log(`Superseded ${superseded.id} with ${superseded.supersededBy}`);
+	});
+
+// Decision archive command: moves a retired ADR into backlog/archive/decisions, never deleting it.
+addHelpSchema(decisionCmd.command("archive <decisionId>"), {
+	required: [{ name: "decisionId", type: "Decision ID", description: "Retired ADR to archive" }],
+	writes:
+		"Moves a rejected, deprecated, or superseded ADR to backlog/archive/decisions, keeping its ID, content, and links; refuses an applicable accepted or proposed ADR",
+	output: "Archived decision ID",
+	examples: ["backlog decision archive decision-1"],
+})
+	.description("archive a retired ADR under backlog/archive/decisions")
+	.action(async (decisionId: string) => {
+		const cwd = await requireProjectRoot();
+		const core = new Core(cwd);
+		const decision = await core.archiveDecision(decisionId);
+		console.log(`Archived decision ${decision.id}`);
+	});
+
+// Decision restore command: moves an archived ADR back to backlog/decisions unchanged.
+addHelpSchema(decisionCmd.command("restore <decisionId>"), {
+	required: [{ name: "decisionId", type: "Decision ID", description: "Archived ADR to restore" }],
+	writes: "Moves an archived ADR back to backlog/decisions without changing its content or links",
+	output: "Restored decision ID",
+	examples: ["backlog decision restore decision-1"],
+})
+	.description("restore an archived ADR to backlog/decisions")
+	.action(async (decisionId: string) => {
+		const cwd = await requireProjectRoot();
+		const core = new Core(cwd);
+		const decision = await core.restoreDecision(decisionId);
+		console.log(`Restored decision ${decision.id}`);
 	});
 
 // Agents command group

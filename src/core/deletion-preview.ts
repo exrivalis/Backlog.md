@@ -143,7 +143,7 @@ const RELATION_ORDER: Record<DeletionReferenceRelation, number> = {
  */
 const DOCUMENT_ID_REFERENCE_PATTERN = /^doc-\d+(?:\.\d+)*$/i;
 
-function isDocumentIdReference(entry: string): boolean {
+export function isDocumentIdReference(entry: string): boolean {
 	return DOCUMENT_ID_REFERENCE_PATTERN.test(entry.trim());
 }
 
@@ -153,7 +153,7 @@ export function displayDeletionPath(core: Core, absolutePath: string): string {
 	return relative(core.fs.rootDir, absolutePath).split(sep).join("/");
 }
 
-function documentAbsolutePath(core: Core, docsRelativePath: string): string {
+export function documentAbsolutePath(core: Core, docsRelativePath: string): string {
 	return join(core.fs.docsDir, ...docsRelativePath.split("/"));
 }
 

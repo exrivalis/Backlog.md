@@ -4134,6 +4134,74 @@ async function runDeletion(
 	}
 }
 
+async function runDocumentDeletion(
+	requestedId: string,
+	options: { preview?: boolean; confirm?: boolean; unlink?: boolean; reassignTo?: string },
+): Promise<void> {
+	if (options.preview && options.confirm) {
+		console.error("Choose one: --preview to review the deletion, or --confirm to delete.");
+		process.exitCode = 1;
+		return;
+	}
+	if (options.preview) {
+		await runDeletion("document", requestedId, options, { confirm: false });
+		return;
+	}
+	if (options.unlink && options.reassignTo !== undefined) {
+		console.error("Choose one resolution: --unlink or --reassign-to <id>.");
+		process.exitCode = 1;
+		return;
+	}
+	if (!options.confirm) {
+		console.error(
+			"Nothing was deleted. Deletion is never implicit: pass --preview to list the active references a delete would affect, or --confirm to delete the document.",
+		);
+		process.exitCode = 1;
+		return;
+	}
+
+	const cwd = await requireProjectRoot();
+	const core = new Core(cwd);
+	const preview = await buildDeletionPreview(core, "document", requestedId);
+	if (preview.status !== "found") {
+		console.error(preview.message);
+		process.exitCode = 1;
+		return;
+	}
+	const resolution: DeletionResolution = options.unlink
+		? { action: "unlink" }
+		: options.reassignTo !== undefined
+			? { action: "reassign", replacementId: options.reassignTo }
+			: { action: "cancel" };
+	const validation = await validateDeletionResolution(core, preview, resolution);
+	if (!validation.ok || (resolution.action === "cancel" && preview.references.length > 0)) {
+		console.log(formatDeletionPreview(preview, validation, { recoveryWarning: await deletionRecoveryWarning(core) }));
+		console.error(
+			resolution.action === "cancel" && preview.references.length > 0
+				? "Nothing was deleted. Choose --unlink or --reassign-to to resolve the active references."
+				: "Nothing was deleted.",
+		);
+		process.exitCode = 1;
+		return;
+	}
+
+	try {
+		const result = await core.deleteDocument(requestedId, resolution);
+		for (const update of result.updates) {
+			console.log(
+				`${update.sourceId} documentation link "${update.value}" -> ${
+					update.replacement === null ? "removed" : `"${update.replacement}"`
+				}`,
+			);
+		}
+		console.log(`Deleted document ${result.id} (${result.path}).`);
+		console.log(await deletionRecoveryWarning(core));
+	} catch (error) {
+		console.error(error instanceof Error ? error.message : String(error));
+		process.exitCode = 1;
+	}
+}
+
 addHelpSchema(taskCmd.command("delete <taskId>"), {
 	required: [
 		{ name: "taskId", type: "Task ID", description: "Task to preview for deletion, or delete with --confirm" },
@@ -5207,29 +5275,46 @@ addHelpSchema(docCmd.command("view <docId>"), {
 	});
 
 addHelpSchema(docCmd.command("delete <docId>"), {
-	required: [{ name: "docId", type: "Document ID", description: "Document whose deletion would be previewed" }],
+	required: [{ name: "docId", type: "Document ID", description: "Document to delete" }],
 	optional: [
-		{ name: "preview", type: "Boolean", description: "Required: list the active references a delete would affect" },
-		{ name: "unlink", type: "Boolean", description: "Validate removing every listed documentation link" },
+		{
+			name: "preview",
+			type: "Boolean",
+			description: "List the active references a delete would affect; nothing is deleted",
+		},
+		{
+			name: "confirm",
+			type: "Boolean",
+			description: "Delete the document; refuses while active structured references remain",
+		},
+		{ name: "unlink", type: "Boolean", description: "Remove every listed documentation link, then delete" },
 		{
 			name: "reassign-to",
 			type: "Document ID",
-			description: "Validate pointing every listed documentation link at this document instead",
+			description: "Point every listed documentation link at this document, then delete",
 		},
 	],
 	reads: "Task, draft, and completed records whose documentation links could reference the document",
-	writes: "None; this command previews and validates, it never deletes",
-	output: "Reference report; exit code 1 when the target or the chosen resolution is rejected",
+	writes: "With --confirm: deletes the document file and updates the linking records; --preview writes nothing",
+	output:
+		"With --preview: reference report. With --confirm: the applied reference edits and the deleted file; exit code 1 when the target or the chosen resolution is rejected",
 	warnings: [DELETION_FREE_TEXT_LIMIT, DELETION_GIT_RECOVERY_WARNING],
-	examples: ["backlog doc delete doc-1 --preview", "backlog doc delete doc-1 --preview --reassign-to doc-2"],
+	examples: [
+		"backlog doc delete doc-1 --preview",
+		"backlog doc delete doc-1 --preview --reassign-to doc-2",
+		"backlog doc delete doc-1 --confirm",
+	],
 })
-	.description("preview the active references an explicit delete would affect")
+	.description("delete a document explicitly, or preview its references first")
 	.option("--preview", "list the active references a delete would affect; nothing is deleted")
-	.option("--unlink", "validate removing every listed documentation link")
-	.option("--reassign-to <id>", "validate repointing every listed documentation link at this document")
-	.action(async (docId: string, options: { preview?: boolean; unlink?: boolean; reassignTo?: string }) => {
-		await runDeletion("document", docId, options, { confirm: false });
-	});
+	.option("--confirm", "delete the document file once its active references are resolved")
+	.option("--unlink", "remove every listed documentation link, then delete")
+	.option("--reassign-to <id>", "point every listed documentation link at this document, then delete")
+	.action(
+		async (docId: string, options: { preview?: boolean; confirm?: boolean; unlink?: boolean; reassignTo?: string }) => {
+			await runDocumentDeletion(docId, options);
+		},
+	);
 
 const decisionCmd = program.command("decision");
 

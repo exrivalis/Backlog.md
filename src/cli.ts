@@ -83,6 +83,12 @@ import type { TaskEditArgs } from "./types/task-edit-args.ts";
 import { formatAcceptanceCriteriaSummarySuffix } from "./ui/acceptance-criteria-progress.ts";
 import { genericSelectList } from "./ui/components/generic-list.ts";
 import { documentDeleteViewerAction } from "./ui/deletion.ts";
+import {
+	changePreviewViewerAction,
+	formatDecisionListItem,
+	formatDocumentViewerDisplay,
+	openDecisionViewer,
+} from "./ui/guidance.ts";
 import { createLoadingScreen } from "./ui/loading.ts";
 import { viewTaskEnhanced } from "./ui/task-viewer-with-search.ts";
 import { scrollableViewer } from "./ui/tui.ts";
@@ -5173,7 +5179,9 @@ addListWindowOptions(docListCommand)
 			// older title-only filenames, or in a subdirectory, opened as nothing.
 			const content = await core.getDocumentContent(selected.id);
 			if (content !== null) {
-				await scrollableViewer(content, { action: documentDeleteViewerAction(core, selected.id) });
+				const actions = [documentDeleteViewerAction(core, selected.id)];
+				if (selected.type === "change") actions.push(changePreviewViewerAction(core, selected.id));
+				await scrollableViewer(formatDocumentViewerDisplay(selected, content), { actions });
 			}
 		}
 	});
@@ -5266,7 +5274,10 @@ addHelpSchema(docCmd.command("view <docId>"), {
 				console.log(content);
 				return;
 			}
-			await scrollableViewer(content, { action: documentDeleteViewerAction(core, docId) });
+			const document = await core.getDocument(docId);
+			const actions = [documentDeleteViewerAction(core, docId)];
+			if (document?.type === "change") actions.push(changePreviewViewerAction(core, docId));
+			await scrollableViewer(document ? formatDocumentViewerDisplay(document, content) : content, { actions });
 		} catch (error) {
 			if (isAmbiguousIdError(error)) {
 				console.error(error.message);
@@ -5483,10 +5494,10 @@ const decisionListCommand = addHelpSchema(decisionCmd.command("list"), {
 	optional: [
 		...LIST_WINDOW_HELP_FIELDS,
 		{ name: "all", type: "Boolean", description: "Include proposed and retired ADRs and archived records" },
-		{ name: "plain", type: "Boolean", description: "Use plain text output, which is the default for this command" },
+		{ name: "plain", type: "Boolean", description: "Use text output instead of interactive UI" },
 		{ name: "json", type: "Boolean", description: "Use versioned machine-readable JSON output" },
 	],
-	output: `Decision list with IDs, titles, and statuses, ordered by ID; applicable guidance by default, every record with --all; versioned JSON with --json. ${LIST_WINDOW_OUTPUT_HELP}; JSON adds total and nextSkip`,
+	output: `Decision list with IDs, titles, and statuses, ordered by ID; applicable guidance by default, every record with --all; interactive selection opens the guidance viewer; versioned JSON with --json. ${LIST_WINDOW_OUTPUT_HELP}; JSON adds total and nextSkip`,
 	examples: [
 		"backlog decision list --plain",
 		"backlog decision list --json",
@@ -5515,14 +5526,25 @@ addListWindowOptions(decisionListCommand)
 			return;
 		}
 
-		// Decisions have no interactive detail view, so text output covers plain and TTY runs.
-		printListWindow(decisions, listWindow, (windowDecisions) => {
-			if (windowDecisions.length === 0) console.log("No decisions found.");
-			for (const decision of windowDecisions) {
-				const status = decision.status ? ` (${decision.status})` : "";
-				console.log(`${decision.id} - ${decision.title}${status}`);
-			}
+		if (outputMode !== "interactive" || decisions.length === 0) {
+			printListWindow(decisions, listWindow, (windowDecisions) => {
+				if (windowDecisions.length === 0) console.log("No decisions found.");
+				for (const decision of windowDecisions) {
+					const status = decision.status ? ` (${decision.status})` : "";
+					console.log(`${decision.id} - ${decision.title}${status}`);
+				}
+			});
+			return;
+		}
+
+		// Interactive selection over the same list: applicable guidance first, retired and
+		// archived records grayed out as history. A selection opens the guidance viewer.
+		const selected = await genericSelectList("Select a decision", decisions, {
+			itemRenderer: formatDecisionListItem,
 		});
+		if (selected) {
+			await openDecisionViewer(core, selected.id);
+		}
 	});
 
 // Decision view command
@@ -5538,17 +5560,18 @@ addHelpSchema(decisionCmd.command("view <decisionId>"), {
 	.action(async (decisionId: string, options) => {
 		const cwd = await requireProjectRoot();
 		const core = new Core(cwd);
-		// Resolved first: a retired ADR must never print as current guidance, and a broken
-		// supersession chain is a diagnosable error, not a missing record.
-		let resolution: AdrGuidanceResolution | null = null;
-		try {
-			resolution = await core.resolveAdrGuidance(decisionId);
-		} catch (error) {
-			console.error(error instanceof Error ? error.message : String(error));
-			process.exitCode = 1;
-			return;
-		}
-		try {
+		const usePlainOutput = isPlainRequested(options) || shouldAutoPlain;
+		if (usePlainOutput) {
+			// Resolved first: a retired ADR must never print as current guidance, and a broken
+			// supersession chain is a diagnosable error, not a missing record.
+			let resolution: AdrGuidanceResolution | null = null;
+			try {
+				resolution = await core.resolveAdrGuidance(decisionId);
+			} catch (error) {
+				console.error(error instanceof Error ? error.message : String(error));
+				process.exitCode = 1;
+				return;
+			}
 			const decision = resolution?.decision ?? null;
 			const content = await core.getDecisionContent(decisionId);
 			if (content === null || !decision) {
@@ -5564,19 +5587,20 @@ addHelpSchema(decisionCmd.command("view <decisionId>"), {
 					: resolution.retired.state;
 				display = `${decision.id} is ${resolution.retired.archived ? "archived" : "retired"} (${why}).\n\n${content}`;
 			}
-			const usePlainOutput = isPlainRequested(options) || shouldAutoPlain;
-			if (usePlainOutput) {
-				console.log(display);
-				return;
-			}
-			await scrollableViewer(display);
+			console.log(display);
+			return;
+		}
+		try {
+			// The interactive viewer derives the same guidance banner from the resolution and
+			// follows replacement navigation; nothing in it mutates a record.
+			await openDecisionViewer(core, decisionId);
 		} catch (error) {
 			if (isAmbiguousIdError(error)) {
 				console.error(error.message);
 				process.exitCode = 1;
 				return;
 			}
-			console.error(`Decision ${decisionId} not found.`);
+			console.error(error instanceof Error ? error.message : String(error));
 			process.exitCode = 1;
 		}
 	});

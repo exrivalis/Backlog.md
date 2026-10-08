@@ -223,17 +223,22 @@ export async function promptText(message: string, defaultValue = ""): Promise<st
 }
 
 /**
- * One extra key action a viewer caller can bind, e.g. the document viewer's explicit delete.
- * `hint` renders in the action bar; `run` returns whether to close the viewer and an optional
- * transient note (an error message, usually) to show in its place.
+ * One extra key action a viewer caller can bind, e.g. the document viewer's explicit delete
+ * or a change document's read-only preview. `key` (one character) triggers it, `hint` renders
+ * in the action bar, and `run` returns whether to close the viewer plus an optional transient
+ * note (an error message, usually) to show in its place.
  */
 export interface ScrollableViewerAction {
+	key: string;
 	hint: string;
 	run: (screen: ScreenInterface, refocus: () => void) => Promise<{ close?: boolean; note?: string }>;
 }
 
 // Display long content in a scrollable viewer.
-export async function scrollableViewer(content: string, options?: { action?: ScrollableViewerAction }): Promise<void> {
+export async function scrollableViewer(
+	content: string,
+	options?: { actions?: ScrollableViewerAction[] },
+): Promise<void> {
 	if (output.isTTY === false) {
 		console.log(content);
 		return;
@@ -244,19 +249,22 @@ export async function scrollableViewer(content: string, options?: { action?: Scr
 			style: {},
 		});
 
-		const action = options?.action;
+		const actions = options?.actions ?? [];
+		const hintContent = () =>
+			` {cyan-fg}[↑↓]{/} Scroll | ${actions.map((action) => action.hint).join(" | ")} | {cyan-fg}[q/Esc]{/} Close`;
 		let noteTimer: ReturnType<typeof setTimeout> | null = null;
-		const hintBar = action
-			? box({
-					parent: screen,
-					bottom: 0,
-					left: 0,
-					width: "100%",
-					height: 1,
-					tags: true,
-					content: ` {cyan-fg}[↑↓]{/} Scroll | ${action.hint} | {cyan-fg}[q/Esc]{/} Close`,
-				})
-			: null;
+		const hintBar =
+			actions.length > 0
+				? box({
+						parent: screen,
+						bottom: 0,
+						left: 0,
+						width: "100%",
+						height: 1,
+						tags: true,
+						content: hintContent(),
+					})
+				: null;
 
 		const viewer = box({
 			parent: screen,
@@ -285,13 +293,13 @@ export async function scrollableViewer(content: string, options?: { action?: Scr
 			screen.render();
 			noteTimer = setTimeout(() => {
 				noteTimer = null;
-				hintBar.setContent(` {cyan-fg}[↑↓]{/} Scroll | ${action?.hint} | {cyan-fg}[q/Esc]{/} Close`);
+				hintBar.setContent(hintContent());
 				screen.render();
 			}, 5000);
 		};
 
-		if (action) {
-			viewer.key(["d", "D"], () => {
+		for (const action of actions) {
+			viewer.key([action.key, action.key.toUpperCase()], () => {
 				void (async () => {
 					const result = await action.run(screen, () => {
 						viewer.focus();

@@ -362,6 +362,7 @@ function renderDeletionPreview(preview: DeletionPreview, recoveryWarning: string
  */
 export function documentDeleteViewerAction(core: Core, docId: string): ScrollableViewerAction {
 	return {
+		key: "d",
 		hint: "{cyan-fg}[D]{/} Delete",
 		run: async (screen, refocus) => {
 			const outcome = await runTuiDeletion({

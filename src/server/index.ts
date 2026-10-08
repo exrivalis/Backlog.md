@@ -476,6 +476,9 @@ export class BacklogServer {
 					"/api/doc/:id": {
 						GET: async (req: Request & { params: { id: string } }) => await this.handleGetDoc(req.params.id),
 					},
+					"/api/doc/:id/preview": {
+						GET: async (req: Request & { params: { id: string } }) => await this.handleGetChangePreview(req.params.id),
+					},
 					"/api/docs/:id": {
 						GET: async (req: Request & { params: { id: string } }) => await this.handleGetDoc(req.params.id),
 						PUT: async (req: Request & { params: { id: string } }) => await this.handleUpdateDoc(req, req.params.id),
@@ -492,6 +495,10 @@ export class BacklogServer {
 					},
 					"/api/decision/:id": {
 						GET: async (req: Request & { params: { id: string } }) => await this.handleGetDecision(req.params.id),
+					},
+					"/api/decision/:id/guidance": {
+						GET: async (req: Request & { params: { id: string } }) =>
+							await this.handleGetDecisionGuidance(req.params.id),
 					},
 					"/api/decisions/:id": {
 						GET: async (req: Request & { params: { id: string } }) => await this.handleGetDecision(req.params.id),
@@ -1484,6 +1491,26 @@ export class BacklogServer {
 		}
 	}
 
+	/**
+	 * The validated change projection from the shared core model, for human-readable review in the
+	 * browser. Same read-only semantics as 'backlog doc validate' and 'backlog doc preview': no
+	 * file is modified, and the response carries every actionable issue when the change is invalid.
+	 */
+	private async handleGetChangePreview(docId: string): Promise<Response> {
+		try {
+			return Response.json(await this.core.buildChangePreview(docId));
+		} catch (error) {
+			if (error instanceof Error && error.message.startsWith("Document not found")) {
+				return Response.json({ error: error.message }, { status: 404 });
+			}
+			if (error instanceof Error && error.message.includes("change documents only")) {
+				return Response.json({ error: error.message }, { status: 400 });
+			}
+			console.error("Error building change preview:", error);
+			return Response.json({ error: "Failed to build change preview" }, { status: 500 });
+		}
+	}
+
 	private async handleCreateDoc(req: Request): Promise<Response> {
 		try {
 			const body = await req.json();
@@ -1606,6 +1633,31 @@ export class BacklogServer {
 			}
 			console.error("Error loading decision:", error);
 			return Response.json({ error: "Decision not found" }, { status: 404 });
+		}
+	}
+
+	/**
+	 * Explicit historical lookup for one decision: an applicable ADR (or legacy decision) comes
+	 * back as-is, while a retired ADR carries its retired state and the accepted replacement that
+	 * now governs its scope. The browser uses this to mark retired records as history and link
+	 * their replacement, never to present them as current guidance.
+	 */
+	private async handleGetDecisionGuidance(decisionId: string): Promise<Response> {
+		try {
+			const resolution = await this.core.resolveAdrGuidance(decisionId);
+			if (!resolution) {
+				return Response.json({ error: "Decision not found" }, { status: 404 });
+			}
+			return Response.json(resolution);
+		} catch (error) {
+			if (isAmbiguousIdError(error)) {
+				return Response.json({ error: error.message }, { status: 409 });
+			}
+			// A broken replacement link or supersession cycle is a record-state conflict the message
+			// explains how to fix; the raw decision itself still loads through the detail endpoint.
+			const message = error instanceof Error ? error.message : "Failed to resolve decision guidance";
+			console.error("Error resolving decision guidance:", error);
+			return Response.json({ error: message }, { status: 409 });
 		}
 	}
 

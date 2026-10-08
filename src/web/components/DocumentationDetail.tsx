@@ -1,10 +1,12 @@
-import {useState, useEffect, memo, useCallback} from 'react';
-import {useParams, useNavigate, useSearchParams} from 'react-router-dom';
+import {useState, useEffect, memo, useCallback, useMemo} from 'react';
+import {Link, useParams, useNavigate, useSearchParams} from 'react-router-dom';
 import {apiClient, isAmbiguousIdConflict} from '../lib/api';
 import MDEditor from '@uiw/react-md-editor';
 import MermaidMarkdown from './MermaidMarkdown';
 import {type Document} from '../../types';
+import {parseChangeDocument, parseChangeIntegration, parseChangeReview} from '../../markdown/change-document';
 import AmbiguousIdNotice from './AmbiguousIdNotice';
+import ChangePreviewModal from './ChangePreviewModal';
 import DeleteEntityDialog from './DeleteEntityDialog';
 import ErrorBoundary from '../components/ErrorBoundary';
 import {SuccessToast} from './SuccessToast';
@@ -64,6 +66,54 @@ const addDocPrefix = (id: string): string => {
     return id.startsWith('doc-') ? id : `doc-${id}`;
 };
 
+const stripIdPrefix = (id: string): string => {
+    return id.startsWith('doc-') ? id.slice('doc-'.length) : id;
+};
+
+const TYPE_LABELS: Record<Document['type'], string> = {
+    readme: 'Readme',
+    guide: 'Guide',
+    specification: 'Specification',
+    change: 'Change',
+    other: 'Document',
+};
+
+/**
+ * What a change document is right now, read from its own managed sections — the same records the
+ * CLI owns, so there is no second review state. An integrated change is history: it was applied
+ * and moved to docs/changes/archive.
+ */
+type ChangeLifecycle = 'proposed' | 'approved' | 'integrated';
+
+const changeLifecycle = (content: string): ChangeLifecycle => {
+    if (parseChangeIntegration(content).integrated) return 'integrated';
+    if (parseChangeReview(content).approved) return 'approved';
+    return 'proposed';
+};
+
+const LIFECYCLE_STYLES: Record<ChangeLifecycle, string> = {
+    proposed: 'bg-yellow-50 text-yellow-700 border-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-300 dark:border-yellow-700',
+    approved: 'bg-green-50 text-green-700 border-green-200 dark:bg-green-900/30 dark:text-green-300 dark:border-green-700',
+    integrated: 'bg-gray-50 text-gray-700 border-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-600',
+};
+
+const LINK_CLASS = 'text-blue-600 dark:text-blue-400 hover:underline focus:outline-none focus:ring-2 focus:ring-blue-500';
+
+const LinkGroup = ({heading, items}: {heading: string; items: Array<{key: string; href: string; label: string}>}) => (
+    <div className="min-w-0">
+        <h3 className="font-semibold text-gray-900 dark:text-gray-100">{heading}</h3>
+        <ul className="mt-1 space-y-0.5">
+            {items.map((item) => (
+                <li key={item.key}>
+                    <Link to={item.href} className={LINK_CLASS}>
+                        {item.label}
+                    </Link>
+                </li>
+            ))}
+        </ul>
+    </div>
+);
+
 const getDocumentDirectory = (path?: string): string => {
     if (!path) return '';
     return path.split(/[\\/]+/).slice(0, -1).join('/');
@@ -94,6 +144,27 @@ export default function DocumentationDetail({docs, onRefreshData, dateFormat}: D
     const [isNewDocument, setIsNewDocument] = useState(false);
     const [showSaveSuccess, setShowSaveSuccess] = useState(false);
     const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+    const [showPreviewModal, setShowPreviewModal] = useState(false);
+
+    const isChange = document?.type === 'change';
+    // One shared-model read per content change: links, lifecycle, review, and integration all come
+    // from the change's own managed sections.
+    const change = useMemo(
+        () =>
+            isChange
+                ? {
+                      parsed: parseChangeDocument(content),
+                      lifecycle: changeLifecycle(content),
+                      review: parseChangeReview(content),
+                      integration: parseChangeIntegration(content),
+                  }
+                : null,
+        [isChange, content],
+    );
+    const specTitle = useCallback(
+        (specId: string): string => docs.find((doc) => doc.id.toLowerCase() === specId.toLowerCase())?.title ?? specId,
+        [docs],
+    );
 
     useEffect(() => {
         if (id === 'new') {
@@ -353,8 +424,21 @@ export default function DocumentationDetail({docs, onRefreshData, dateFormat}: D
                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                                                   d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
                                         </svg>
-                                        <span>Documentation</span>
+                                        <span>{document ? TYPE_LABELS[document.type] : 'Documentation'}</span>
                                     </div>
+                                    {change?.lifecycle && (
+                                        <div className="flex items-center space-x-2">
+                                            <span
+                                                className={`inline-flex items-center px-2 py-1 rounded-md text-xs font-medium border ${LIFECYCLE_STYLES[change.lifecycle]}`}
+                                            >
+                                                {change.lifecycle === 'integrated'
+                                                    ? 'Integrated'
+                                                    : change.lifecycle === 'approved'
+                                                        ? 'Approved'
+                                                        : 'Proposed'}
+                                            </span>
+                                        </div>
+                                    )}
                                     {document?.path && (
                                         <div className="flex items-center space-x-2">
                                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -379,6 +463,14 @@ export default function DocumentationDetail({docs, onRefreshData, dateFormat}: D
                             <div className="flex flex-wrap items-center space-x-3 ml-6">
                                 {!isEditing ? (
                                     <>
+                                        {isChange && change?.lifecycle !== 'integrated' && (
+                                            <button
+                                                onClick={() => setShowPreviewModal(true)}
+                                                className="inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 focus:ring-offset-2 dark:focus:ring-offset-gray-900 transition-colors duration-200"
+                                            >
+                                                Preview
+                                            </button>
+                                        )}
                                         {document && !isNewDocument && (
                                             <button
                                                 onClick={() => setShowDeleteDialog(true)}
@@ -430,6 +522,56 @@ export default function DocumentationDetail({docs, onRefreshData, dateFormat}: D
                         </div>
                     </div>
                 </div>
+
+                {/* Change links: current specs, tasks, and decisions this proposal touches. */}
+                {isChange && change && !isEditing && (
+                    <div className="border-b border-gray-200 bg-white px-8 py-4 dark:border-gray-700 dark:bg-gray-900 transition-colors duration-200">
+                        <div className="max-w-4xl mx-auto flex flex-wrap gap-x-10 gap-y-3 text-sm">
+                            {change.parsed.affectedSpecs.length > 0 && (
+                                <LinkGroup
+                                    heading="Affected specs"
+                                    items={change.parsed.affectedSpecs.map((link) => ({
+                                        key: `${link.id}|${link.line}`,
+                                        href: `/documentation/${stripIdPrefix(link.id)}/${sanitizeUrlTitle(specTitle(link.id))}`,
+                                        label: `${link.id} — ${specTitle(link.id)}`,
+                                    }))}
+                                />
+                            )}
+                            {change.parsed.linkedTasks.length > 0 && (
+                                <LinkGroup
+                                    heading="Linked tasks"
+                                    items={change.parsed.linkedTasks.map((link) => ({
+                                        key: `${link.id}|${link.line}`,
+                                        href: `/tasks/${link.id}`,
+                                        label: link.id,
+                                    }))}
+                                />
+                            )}
+                            {change.parsed.relatedDecisions.length > 0 && (
+                                <LinkGroup
+                                    heading="Related decisions"
+                                    items={change.parsed.relatedDecisions.map((link) => ({
+                                        key: `${link.id}|${link.line}`,
+                                        href: `/decisions/${stripIdPrefix(link.id)}`,
+                                        label: link.id,
+                                    }))}
+                                />
+                            )}
+                            {change.review.approved && (
+                                <p className="text-gray-700 dark:text-gray-300">
+                                    Approved{change.review.approvedBy ? ` by ${change.review.approvedBy}` : ''} on{' '}
+                                    {change.review.approvedDate}.
+                                </p>
+                            )}
+                            {change.integration.integrated && (
+                                <p className="text-gray-700 dark:text-gray-300">
+                                    Integrated on {change.integration.integratedDate} into{' '}
+                                    {change.integration.specIds.join(', ')}. This change is kept as history.
+                                </p>
+                            )}
+                        </div>
+                    </div>
+                )}
 
                 {/* Content Section */}
                 <div className="flex-1 bg-gray-50 dark:bg-gray-800 transition-colors duration-200 flex flex-col">
@@ -486,6 +628,14 @@ export default function DocumentationDetail({docs, onRefreshData, dateFormat}: D
                     title={document.title}
                     onClose={() => setShowDeleteDialog(false)}
                     onDeleted={() => void handleDocumentDeleted()}
+                />
+            )}
+
+            {showPreviewModal && document && (
+                <ChangePreviewModal
+                    id={document.id}
+                    title={document.title}
+                    onClose={() => setShowPreviewModal(false)}
                 />
             )}
         </ErrorBoundary>

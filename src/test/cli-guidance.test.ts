@@ -103,6 +103,13 @@ describe("CLI Integration", () => {
 			expect(overview).toContain(
 				"Never edit task, draft, document, decision, or milestone markdown files directly; commands preserve metadata, relationships, and history.",
 			);
+			expect(overview).toContain("### Specifications and Changes");
+			expect(overview).toContain("Specifications and changes are optional; most tasks need neither.");
+			expect(overview).toContain("A specification (document type `specification`) states current required behavior");
+			expect(overview).toContain("a change (document type `change`) is only a proposed delta until applied");
+			expect(overview).toContain("`backlog doc approve <change-id>` records explicit human review");
+			expect(overview).toContain("`backlog doc apply <change-id>` integrates the approved delta");
+			expect(overview).toContain("Never treat a task's status as approval.");
 			expect(overview).not.toContain("MCP Tools Quick Reference");
 			expect(overview).not.toContain("backlog://workflow/");
 			expect(taskCreation).toContain("## Task Creation Guide");
@@ -271,6 +278,41 @@ describe("CLI Integration", () => {
 				expect(guide).toContain("incoming dependencies and task references");
 			}
 			expect(CLI_AGENT_NUDGE).not.toContain("task complete");
+		});
+
+		it("teaches archive-default cleanup and explicitly authorized deletion", async () => {
+			const overview = normalizeCliOutput(await $`bun ${CLI_PATH} instructions overview`.cwd(TEST_DIR).text());
+			const taskFinalization = normalizeCliOutput(
+				await $`bun ${CLI_PATH} instructions task-finalization`.cwd(TEST_DIR).text(),
+			);
+			const taskExecution = normalizeCliOutput(
+				await $`bun ${CLI_PATH} instructions task-execution`.cwd(TEST_DIR).text(),
+			);
+
+			for (const guide of [overview, taskFinalization]) {
+				expect(guide).toContain("Archive and Complete are the defaults");
+				expect(guide).toContain("Delete a task, draft, or document only when the user explicitly asks for deletion");
+				expect(guide).toContain("--unlink");
+				expect(guide).toContain("--reassign-to");
+				expect(guide).toContain("Git restores only committed files");
+			}
+			// The same public commands a person runs; no agent-only mutation path.
+			expect(overview).toContain("`backlog task delete BACK-1`");
+			expect(overview).toContain("`backlog draft delete DRAFT-1`");
+			expect(overview).toContain("`backlog doc delete doc-1`");
+			// A direct user request authorizes the noninteractive run; archive requests are never
+			// reinterpreted as deletions and deletions are never forced when archive was asked for.
+			expect(overview).toContain("a direct request authorizes the noninteractive `--confirm` run");
+			expect(overview).toContain("never delete when the user asked to archive");
+			expect(taskFinalization).toContain("`backlog task delete BACK-1 --preview`");
+			expect(taskExecution).toContain(
+				"change documents are proposed deltas that alter a spec only after `backlog doc approve` and `backlog doc apply`",
+			);
+			expect(taskExecution).toContain("Most tasks need neither");
+			expect(taskExecution).toContain(
+				"Cite only applicable accepted ADRs from `backlog decision list` as current guidance",
+			);
+			expect(taskExecution).toContain("`backlog decision view <decision-id>` names its replacement");
 		});
 
 		it("rejects unknown instruction guides with valid options", async () => {

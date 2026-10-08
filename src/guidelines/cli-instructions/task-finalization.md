@@ -15,6 +15,8 @@ Leave finished tasks on the board until periodic cleanup. Complete (`backlog tas
 
 Use Archive only for canceled, duplicate, or invalid work. Archiving removes incoming dependencies and task references.
 
+Archive and Complete are the defaults. Delete a task, draft, or document only when the user explicitly asks for deletion: run `backlog task delete {{TASK_ID:1}} --preview` (likewise `draft delete`, `doc delete`) to list active structured references, then the noninteractive `--confirm` run with the user's chosen resolution — `--unlink` to remove them or `--reassign-to <id>` to point them elsewhere. Deletion removes the file permanently; Git restores only committed files, so an uncommitted deleted file may not be recoverable.
+
 ### Follow-up Work
 
 Do not create or start follow-up tasks without user approval. For subtasks, verify each separately and finish the parent only when all are complete, unless instructed otherwise. Continue to the next subtask only when the user already assigned the full series; otherwise ask first.

@@ -34,6 +34,10 @@ Mark finished work Done (or the configured final status). During periodic cleanu
 
 Use Archive (`backlog task archive {{TASK_ID:123}}`) for canceled, duplicate, or invalid work. Archiving removes incoming dependencies and task references.
 
+Archive and Complete are the defaults. Delete a task, draft, or document only when the user explicitly asks for deletion — a direct request authorizes the noninteractive `--confirm` run of `backlog task delete {{TASK_ID:1}}`, `backlog draft delete DRAFT-1`, or `backlog doc delete doc-1`. Never refuse a requested deletion because archive is the default, and never delete when the user asked to archive.
+
+Run the matching `delete` with `--preview` first. Deletion stops while active structured references remain unless the user chose `--unlink` to remove them or `--reassign-to <id>` to point them at another record. Deletion removes the file permanently: free-text mentions are not listed, and a deleted uncommitted file may not be recoverable — Git restores only committed files.
+
 Use the CLI for Backlog changes. Never edit task, draft, document, decision, or milestone markdown files directly; commands preserve metadata, relationships, and history.
 
 ### Decisions and ADRs
@@ -41,3 +45,7 @@ Use the CLI for Backlog changes. Never edit task, draft, document, decision, or 
 `backlog decision list` and `backlog search` return applicable guidance only: accepted ADRs and ordinary decisions. Rejected, superseded, and archived ADRs are history — never cite them as current guidance for new work.
 
 For an old ID, run `backlog decision view <decision-id> --plain`. A retired ADR identifies its retired state and the accepted ADR that now governs its scope. `backlog decision list --all` shows every record, including archived ones.
+
+### Specifications and Changes
+
+Specifications and changes are optional; most tasks need neither. A specification (document type `specification`) states current required behavior; a change (document type `change`) is only a proposed delta until applied. `backlog doc validate <change-id>` and `backlog doc preview <change-id>` check a change without writing; `backlog doc approve <change-id>` records explicit human review; `backlog doc apply <change-id>` integrates the approved delta into the current specs and archives the change as history. Never treat a task's status as approval.

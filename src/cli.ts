@@ -3947,7 +3947,7 @@ addHelpSchema(taskCmd.command("archive <taskId>"), {
 	output: "Archive confirmation text",
 	examples: ["backlog task archive {{TASK_ID:1}}"],
 })
-	.description("archive canceled, duplicate, or invalid work")
+	.description("archive canceled, duplicate, or invalid work; the default removal")
 	.action(async (taskId: string) => {
 		const cwd = await requireProjectRoot();
 		const core = new Core(cwd);

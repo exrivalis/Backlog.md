@@ -52,6 +52,10 @@ Do not check acceptance criteria, write the final summary, or move the task to t
 
 If you discover work that is outside the task's acceptance criteria, stop and ask the user whether to add scope to the current task or create follow-up work. Do not silently expand the task.
 
+### Specifications, Changes, and ADRs
+
+Specifications state current required behavior; change documents are proposed deltas that alter a spec only after `backlog doc approve` and `backlog doc apply` with human review. Most tasks need neither. Cite only applicable accepted ADRs from `backlog decision list` as current guidance; a superseded or archived ADR is history — `backlog decision view <decision-id>` names its replacement instead.
+
 ### Working With Subtasks
 
 If the user assigns a parent task and all subtasks, complete subtasks one at a time. Each subtask should have its own plan, notes, checked acceptance criteria, and final summary.

@@ -94,6 +94,36 @@ backlog init "Personal Planning" --no-git
 > Without an install, `npx backlog` resolves to an unrelated third-party npm package — not this tool.
 > (With `backlog.md` installed as a project dependency, `npx backlog` runs the local binary as usual.)
 
+### Installing this fork
+
+This repository is a fork of [MrLesk/Backlog.md](https://github.com/MrLesk/Backlog.md), published as the scoped npm package `@exrivalis/backlog-fork` with the executable `backlog-fork`. It installs and runs alongside upstream Backlog.md (package `backlog.md`, executable `backlog`) in the same environment without collision; each project uses whichever CLI created or manages it.
+
+```bash
+npm i -g @exrivalis/backlog-fork
+# or: bun add -g @exrivalis/backlog-fork
+
+backlog-fork init "My Awesome Project"
+```
+
+Fork versions track the upstream Backlog.md release they are built from (for example `1.53.0`).
+
+```bash
+# Pin a version in a consuming project
+npm i -g @exrivalis/backlog-fork@1.53.0
+
+# Upgrade
+npm i -g @exrivalis/backlog-fork@latest
+
+# Roll back to a previous version
+npm i -g @exrivalis/backlog-fork@<previous-version>
+
+# Verify which CLIs are active
+backlog-fork -v
+backlog -v
+```
+
+The fork is not published automatically: each release is built with `bun run build` and published after explicit review.
+
 ### Run with Nix
 
 Run Backlog.md directly from the repository flake:

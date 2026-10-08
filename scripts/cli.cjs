@@ -16,14 +16,12 @@ function printInstallHelp() {
 		}
 		console.error("To fix on macOS:");
 		console.error("  - Compare architectures: `node -p process.arch` vs `uname -m` (arm64 = Apple Silicon hardware).");
-		console.error(
-			"  - Homebrew: use the native brew (`which brew`; /opt/homebrew = arm64, /usr/local = Intel), then `brew reinstall backlog-md`.",
-		);
-		console.error("  - npm on Apple Silicon: `arch -arm64 npm i -g backlog.md`");
-		console.error("  - Bun on Apple Silicon: `arch -arm64 bun add -g backlog.md`");
-		console.error("More details: https://github.com/MrLesk/Backlog.md#apple-silicon-macos");
+		console.error("  - npm on Apple Silicon: `arch -arm64 npm i -g @exrivalis/backlog-fork`");
+		console.error("  - Bun on Apple Silicon: `arch -arm64 bun add -g @exrivalis/backlog-fork`");
 	} else {
-		console.error("Reinstall backlog.md so the platform package matching this architecture gets installed.");
+		console.error(
+			"Reinstall @exrivalis/backlog-fork so the platform package matching this architecture gets installed.",
+		);
 	}
 }
 
@@ -51,7 +49,7 @@ function handleSpawnError(binaryPath, error) {
 		console.error("The binary is missing or was built for a different CPU architecture.");
 		printInstallHelp();
 	} else {
-		console.error("Failed to start backlog:", error);
+		console.error("Failed to start backlog-fork:", error);
 	}
 	process.exit(1);
 }
@@ -73,7 +71,8 @@ function main() {
 		if (arg === binaryPath) return false;
 		// Filter any accidental deep path to our platform package binary
 		try {
-			const pattern = /node_modules[/\\]backlog\.md-(darwin|linux|windows)-[^/\\]+[/\\]backlog(\.exe)?$/i;
+			const pattern =
+				/node_modules[/\\]@exrivalis[/\\]backlog-fork-(darwin|linux|windows)-[^/\\]+[/\\]backlog(\.exe)?$/i;
 			return !pattern.test(arg);
 		} catch {
 			return true;
@@ -97,7 +96,7 @@ function main() {
 	child.on("exit", (code, signal) => {
 		if (isArchitectureSignal(signal)) {
 			// Typical symptom of running a binary built for the other CPU architecture
-			console.error(`\nbacklog crashed with ${signal} (illegal instruction): ${binaryPath}`);
+			console.error(`\nbacklog-fork crashed with ${signal} (illegal instruction): ${binaryPath}`);
 			console.error("The installed binary was likely built for a different CPU architecture.");
 			printInstallHelp();
 			process.exit(1);

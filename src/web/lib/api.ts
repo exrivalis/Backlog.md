@@ -1,7 +1,9 @@
 import type { DuplicateRepairPlan, DuplicateRepairResult } from "../../core/duplicate-task-repair.ts";
 import type { TaskStatistics } from "../../core/statistics.ts";
 import type { TaskDetail } from "../../core/task-detail.ts";
+import type { ChangePreview } from "../../markdown/change-document.ts";
 import type {
+	AdrGuidanceResolution,
 	BacklogConfig,
 	Decision,
 	Document,
@@ -593,6 +595,28 @@ export class ApiClient {
 		const response = await fetch(`${API_BASE}/decision/${encodeURIComponent(id)}`);
 		if (!response.ok) {
 			throw await toApiError(response, "Failed to fetch decision");
+		}
+		return response.json();
+	}
+
+	/**
+	 * Historical lookup through the shared guidance resolver: a retired ADR arrives marked retired
+	 * with its accepted replacement, so the view can link it instead of presenting history as
+	 * current guidance.
+	 */
+	async fetchDecisionGuidance(id: string): Promise<AdrGuidanceResolution> {
+		const response = await fetch(`${API_BASE}/decision/${encodeURIComponent(id)}/guidance`);
+		if (!response.ok) {
+			throw await toApiError(response, "Failed to fetch decision guidance");
+		}
+		return response.json();
+	}
+
+	/** Read-only validated change projection, identical to `backlog doc preview`. */
+	async fetchChangePreview(id: string): Promise<ChangePreview> {
+		const response = await fetch(`${API_BASE}/doc/${encodeURIComponent(id)}/preview`);
+		if (!response.ok) {
+			throw await toApiError(response, "Failed to build change preview");
 		}
 		return response.json();
 	}

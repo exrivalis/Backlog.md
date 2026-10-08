@@ -1,9 +1,9 @@
 import { useState, useEffect, memo } from 'react';
-import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { apiClient, isAmbiguousIdConflict } from '../lib/api';
 import MDEditor from '@uiw/react-md-editor';
 import MermaidMarkdown from './MermaidMarkdown';
-import { type Decision } from '../../types';
+import { type AdrGuidanceResolution, type Decision } from '../../types';
 import AmbiguousIdNotice from './AmbiguousIdNotice';
 import ErrorBoundary from '../components/ErrorBoundary';
 import { SuccessToast } from './SuccessToast';
@@ -88,6 +88,8 @@ export default function DecisionDetail({ decisions, onRefreshData, dateFormat }:
 	const [error, setError] = useState<Error | null>(null);
 	const [isNewDecision, setIsNewDecision] = useState(false);
 	const [showSaveSuccess, setShowSaveSuccess] = useState(false);
+	const [guidance, setGuidance] = useState<AdrGuidanceResolution | null>(null);
+	const [guidanceError, setGuidanceError] = useState<string | null>(null);
 
 	useEffect(() => {
 		if (id === 'new') {
@@ -103,6 +105,8 @@ export default function DecisionDetail({ decisions, onRefreshData, dateFormat }:
 			setOriginalDecisionTitle('');
 			setContent('');
 			setOriginalContent('');
+			setGuidance(null);
+			setGuidanceError(null);
 		} else if (id) {
 			setIsNewDecision(false);
 			setIsEditing(false); // Ensure we start in preview mode for existing decisions
@@ -124,10 +128,12 @@ export default function DecisionDetail({ decisions, onRefreshData, dateFormat }:
 
 	const loadDecisionContent = async () => {
 		if (!id) return;
-		
+
 		try {
 			setIsLoading(true);
 			setError(null);
+			setGuidance(null);
+			setGuidanceError(null);
 			// Find decision from props
 			const prefixedId = addDecisionPrefix(id);
 			const decision = decisions.find(d => d.id === prefixedId);
@@ -158,6 +164,13 @@ export default function DecisionDetail({ decisions, onRefreshData, dateFormat }:
 					setDecisionTitle(decision.title || '');
 					setOriginalDecisionTitle(decision.title || '');
 				}
+			}
+			// Historical lookup alongside the record read: this is what marks a retired ADR as
+			// history and links its replacement. The record stays viewable when the lookup fails.
+			try {
+				setGuidance(await apiClient.fetchDecisionGuidance(prefixedId));
+			} catch (guidanceFetchError) {
+				setGuidanceError(guidanceFetchError instanceof Error ? guidanceFetchError.message : String(guidanceFetchError));
 			}
 		} catch (error) {
 			console.error('Failed to load decision:', error);
@@ -309,10 +322,17 @@ export default function DecisionDetail({ decisions, onRefreshData, dateFormat }:
 										<svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 											<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
 										</svg>
-										<span 
+										<span
 											className={`inline-flex items-center px-2 py-1 rounded-md text-xs font-medium border ${getStatusColor(decision.status)}`}
 										>
 											{decision.status.charAt(0).toUpperCase() + decision.status.slice(1)}
+										</span>
+									</div>
+								)}
+								{decision?.archived && (
+									<div className="flex items-center space-x-2">
+										<span className="inline-flex items-center px-2 py-1 rounded-md text-xs font-medium border bg-gray-50 text-gray-700 border-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-600">
+											Archived
 										</span>
 									</div>
 								)}
@@ -359,6 +379,39 @@ export default function DecisionDetail({ decisions, onRefreshData, dateFormat }:
 					</div>
 				</div>
 			</div>
+
+				{/* Retired-ADR notice: an explicit historical lookup must never read as current guidance. */}
+			{guidance?.retired && (
+				<div
+					className="border-b border-amber-200 bg-amber-50 px-8 py-3 dark:border-amber-700 dark:bg-amber-900/30 transition-colors duration-200"
+					role="note"
+				>
+					<p className="max-w-4xl mx-auto text-sm text-amber-800 dark:text-amber-200">
+						Retired ({guidance.retired.state}) — historical record, not current guidance.
+						{guidance.retired.replacement && (
+							<>
+								{' '}Superseded by{' '}
+								<Link
+									to={`/decisions/${stripIdPrefix(guidance.retired.replacement.id)}/${sanitizeUrlTitle(guidance.retired.replacement.title)}`}
+									className="font-medium underline decoration-amber-300 underline-offset-2 hover:no-underline focus:outline-none focus:ring-2 focus:ring-amber-500"
+								>
+									{guidance.retired.replacement.id} — {guidance.retired.replacement.title}
+								</Link>
+							</>
+						)}
+					</p>
+				</div>
+			)}
+
+			{/* The record itself is viewable even when its replacement link is broken or cyclic. */}
+			{guidanceError && (
+				<div
+					className="border-b border-amber-200 bg-amber-50 px-8 py-3 dark:border-amber-700 dark:bg-amber-900/30 transition-colors duration-200"
+					role="alert"
+				>
+					<p className="max-w-4xl mx-auto text-sm text-amber-800 dark:text-amber-200">{guidanceError}</p>
+				</div>
+			)}
 
 			{/* Content Section */}
 			<div className="flex-1 bg-gray-50 dark:bg-gray-800 transition-colors duration-200 flex flex-col">

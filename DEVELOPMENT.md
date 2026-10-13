@@ -204,10 +204,10 @@ provenance automatically. Follow the steps below to keep the setup healthy.
   version field manually.
 - In npm's **Trusted publishers** settings, link the
   `exrivalis/Backlog.md` repository and the `Release multi-platform executables`
-  workflow for each package: `@exrivalis/backlog-fork`,
-  `@exrivalis/backlog-fork-linux-{x64,arm64}`,
-  `@exrivalis/backlog-fork-darwin-{x64,arm64}`, and
-  `@exrivalis/backlog-fork-windows-{x64,arm64}`.
+  workflow for each package: `@exrivalis/backlog.md`,
+  `@exrivalis/backlog.md-linux-{x64,arm64}`,
+  `@exrivalis/backlog.md-darwin-{x64,arm64}`, and
+  `@exrivalis/backlog.md-windows-{x64,arm64}`.
 - Remove the legacy `NODE_AUTH_TOKEN` repository secret. Publishing now uses
   the GitHub-issued OIDC token, so no long-lived npm tokens should remain.
 - The workflow activates `npm@latest` (currently 11.6.0 as of 2025-09-18) via

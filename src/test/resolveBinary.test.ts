@@ -19,95 +19,95 @@ function resolverFor(available: string[]) {
 
 describe("getPackageName", () => {
 	it("maps win32 platform to windows package", () => {
-		expect(getPackageName("win32", "x64")).toBe("@exrivalis/backlog-fork-windows-x64");
+		expect(getPackageName("win32", "x64")).toBe("@exrivalis/backlog.md-windows-x64");
 	});
 
 	it("maps win32 arm64 to windows-arm64 package", () => {
-		expect(getPackageName("win32", "arm64")).toBe("@exrivalis/backlog-fork-windows-arm64");
+		expect(getPackageName("win32", "arm64")).toBe("@exrivalis/backlog.md-windows-arm64");
 	});
 
 	it("returns linux name unchanged", () => {
-		expect(getPackageName("linux", "arm64")).toBe("@exrivalis/backlog-fork-linux-arm64");
+		expect(getPackageName("linux", "arm64")).toBe("@exrivalis/backlog.md-linux-arm64");
 	});
 
 	it("maps darwin arches to darwin packages", () => {
-		expect(getPackageName("darwin", "arm64")).toBe("@exrivalis/backlog-fork-darwin-arm64");
-		expect(getPackageName("darwin", "x64")).toBe("@exrivalis/backlog-fork-darwin-x64");
+		expect(getPackageName("darwin", "arm64")).toBe("@exrivalis/backlog.md-darwin-arm64");
+		expect(getPackageName("darwin", "x64")).toBe("@exrivalis/backlog.md-darwin-x64");
 	});
 });
 
 describe("getCandidatePackageNames", () => {
 	it("tries the sibling darwin arch after the native one on macOS", () => {
 		expect(getCandidatePackageNames("darwin", "arm64", false)).toEqual([
-			"@exrivalis/backlog-fork-darwin-arm64",
-			"@exrivalis/backlog-fork-darwin-x64",
+			"@exrivalis/backlog.md-darwin-arm64",
+			"@exrivalis/backlog.md-darwin-x64",
 		]);
 		expect(getCandidatePackageNames("darwin", "x64", false)).toEqual([
-			"@exrivalis/backlog-fork-darwin-x64",
-			"@exrivalis/backlog-fork-darwin-arm64",
+			"@exrivalis/backlog.md-darwin-x64",
+			"@exrivalis/backlog.md-darwin-arm64",
 		]);
 	});
 
 	it("prefers the arm64 hardware arch when the process runs under Rosetta", () => {
 		expect(getCandidatePackageNames("darwin", "x64", true)).toEqual([
-			"@exrivalis/backlog-fork-darwin-arm64",
-			"@exrivalis/backlog-fork-darwin-x64",
+			"@exrivalis/backlog.md-darwin-arm64",
+			"@exrivalis/backlog.md-darwin-x64",
 		]);
 	});
 
 	it("does not add fallbacks on other platforms", () => {
-		expect(getCandidatePackageNames("linux", "x64")).toEqual(["@exrivalis/backlog-fork-linux-x64"]);
-		expect(getCandidatePackageNames("linux", "arm64")).toEqual(["@exrivalis/backlog-fork-linux-arm64"]);
-		expect(getCandidatePackageNames("win32", "x64")).toEqual(["@exrivalis/backlog-fork-windows-x64"]);
+		expect(getCandidatePackageNames("linux", "x64")).toEqual(["@exrivalis/backlog.md-linux-x64"]);
+		expect(getCandidatePackageNames("linux", "arm64")).toEqual(["@exrivalis/backlog.md-linux-arm64"]);
+		expect(getCandidatePackageNames("win32", "x64")).toEqual(["@exrivalis/backlog.md-windows-x64"]);
 	});
 
 	it("does not add fallbacks for unknown darwin arches", () => {
-		expect(getCandidatePackageNames("darwin", "ppc64")).toEqual(["@exrivalis/backlog-fork-darwin-ppc64"]);
+		expect(getCandidatePackageNames("darwin", "ppc64")).toEqual(["@exrivalis/backlog.md-darwin-ppc64"]);
 	});
 });
 
 describe("resolveBinaryPath", () => {
 	it("resolves the native package when it is installed", () => {
 		const resolver = resolverFor([
-			"@exrivalis/backlog-fork-darwin-arm64/backlog",
-			"@exrivalis/backlog-fork-darwin-x64/backlog",
+			"@exrivalis/backlog.md-darwin-arm64/backlog",
+			"@exrivalis/backlog.md-darwin-x64/backlog",
 		]);
 		expect(resolveBinaryPath("darwin", "arm64", resolver)).toBe(
-			"/node_modules/@exrivalis/backlog-fork-darwin-arm64/backlog",
+			"/node_modules/@exrivalis/backlog.md-darwin-arm64/backlog",
 		);
 	});
 
 	it("falls back to darwin-x64 when arm64 Node only has the x64 package", () => {
-		const resolver = resolverFor(["@exrivalis/backlog-fork-darwin-x64/backlog"]);
+		const resolver = resolverFor(["@exrivalis/backlog.md-darwin-x64/backlog"]);
 		expect(resolveBinaryPath("darwin", "arm64", resolver)).toBe(
-			"/node_modules/@exrivalis/backlog-fork-darwin-x64/backlog",
+			"/node_modules/@exrivalis/backlog.md-darwin-x64/backlog",
 		);
 	});
 
 	it("falls back to darwin-arm64 when Rosetta x64 Node only has the arm64 package", () => {
-		const resolver = resolverFor(["@exrivalis/backlog-fork-darwin-arm64/backlog"]);
+		const resolver = resolverFor(["@exrivalis/backlog.md-darwin-arm64/backlog"]);
 		expect(resolveBinaryPath("darwin", "x64", resolver)).toBe(
-			"/node_modules/@exrivalis/backlog-fork-darwin-arm64/backlog",
+			"/node_modules/@exrivalis/backlog.md-darwin-arm64/backlog",
 		);
 	});
 
 	it("throws the original error when no darwin package is installed", () => {
 		expect(() => resolveBinaryPath("darwin", "arm64", resolverFor([]))).toThrow(
-			"Cannot find module '@exrivalis/backlog-fork-darwin-arm64/backlog'",
+			"Cannot find module '@exrivalis/backlog.md-darwin-arm64/backlog'",
 		);
 	});
 
 	it("does not fall back across arches on linux", () => {
-		const resolver = resolverFor(["@exrivalis/backlog-fork-linux-arm64/backlog"]);
+		const resolver = resolverFor(["@exrivalis/backlog.md-linux-arm64/backlog"]);
 		expect(() => resolveBinaryPath("linux", "x64", resolver)).toThrow(
-			"Cannot find module '@exrivalis/backlog-fork-linux-x64/backlog'",
+			"Cannot find module '@exrivalis/backlog.md-linux-x64/backlog'",
 		);
 	});
 
 	it("resolves the .exe binary on windows", () => {
-		const resolver = resolverFor(["@exrivalis/backlog-fork-windows-x64/backlog.exe"]);
+		const resolver = resolverFor(["@exrivalis/backlog.md-windows-x64/backlog.exe"]);
 		expect(resolveBinaryPath("win32", "x64", resolver)).toBe(
-			"/node_modules/@exrivalis/backlog-fork-windows-x64/backlog.exe",
+			"/node_modules/@exrivalis/backlog.md-windows-x64/backlog.exe",
 		);
 	});
 });

@@ -108,7 +108,7 @@ jobs:
           TAG="${GITHUB_REF##refs/tags/v}"
           jq 'del(.devDependencies,.scripts.prepare,.scripts.preinstall,.type) |
               .version = "'$TAG'" |
-              .bin = {"backlog-fork":"cli.js"} |
+              .bin = {"backlog.md":"cli.js"} |
               .files = ["cli.js","resolveBinary.cjs","postuninstall.cjs","package.json","README.md","LICENSE"] |
               .scripts = {"postuninstall": "node postuninstall.cjs"} |
               .repository = {"type":"git","url":"https://github.com/MrLesk/Backlog.md"} |
@@ -138,27 +138,27 @@ jobs:
       matrix:
         include:
           - target: bun-linux-x64-baseline
-            package: "@exrivalis/backlog-fork-linux-x64"
+            package: "@exrivalis/backlog.md-linux-x64"
             os: linux
             cpu: x64
           - target: bun-linux-arm64
-            package: "@exrivalis/backlog-fork-linux-arm64"
+            package: "@exrivalis/backlog.md-linux-arm64"
             os: linux
             cpu: arm64
           - target: bun-darwin-x64
-            package: "@exrivalis/backlog-fork-darwin-x64"
+            package: "@exrivalis/backlog.md-darwin-x64"
             os: darwin
             cpu: x64
           - target: bun-darwin-arm64
-            package: "@exrivalis/backlog-fork-darwin-arm64"
+            package: "@exrivalis/backlog.md-darwin-arm64"
             os: darwin
             cpu: arm64
           - target: bun-windows-x64-baseline
-            package: "@exrivalis/backlog-fork-windows-x64"
+            package: "@exrivalis/backlog.md-windows-x64"
             os: win32
             cpu: x64
           - target: bun-windows-arm64
-            package: "@exrivalis/backlog-fork-windows-arm64"
+            package: "@exrivalis/backlog.md-windows-arm64"
             os: win32
             cpu: arm64
     runs-on: ubuntu-latest
@@ -241,7 +241,7 @@ jobs:
           VERSION="${GITHUB_REF##refs/tags/v}"
           MAX_ATTEMPTS=40
           SLEEP_SECONDS=15
-          PACKAGE_NAME="$(node -e 'const map = { win32: "windows", darwin: "darwin", linux: "linux" }; const platform = map[process.platform]; const arch = process.arch; if (!platform || !["x64","arm64"].includes(arch)) { process.exit(1); } process.stdout.write(`@exrivalis/backlog-fork-${platform}-${arch}`);')"
+          PACKAGE_NAME="$(node -e 'const map = { win32: "windows", darwin: "darwin", linux: "linux" }; const platform = map[process.platform]; const arch = process.arch; if (!platform || !["x64","arm64"].includes(arch)) { process.exit(1); } process.stdout.write(`@exrivalis/backlog.md-${platform}-${arch}`);')"
           BINARY_PATH="node_modules/${PACKAGE_NAME}/backlog"
 
           echo "Waiting for ${PACKAGE_NAME}@${VERSION} to become installable..."
@@ -281,12 +281,12 @@ jobs:
           MAX_ATTEMPTS=40
           SLEEP_SECONDS=15
           PACKAGES=(
-            "@exrivalis/backlog-fork-linux-x64"
-            "@exrivalis/backlog-fork-linux-arm64"
-            "@exrivalis/backlog-fork-darwin-x64"
-            "@exrivalis/backlog-fork-darwin-arm64"
-            "@exrivalis/backlog-fork-windows-x64"
-            "@exrivalis/backlog-fork-windows-arm64"
+            "@exrivalis/backlog.md-linux-x64"
+            "@exrivalis/backlog.md-linux-arm64"
+            "@exrivalis/backlog.md-darwin-x64"
+            "@exrivalis/backlog.md-darwin-arm64"
+            "@exrivalis/backlog.md-windows-x64"
+            "@exrivalis/backlog.md-windows-arm64"
           )
 
           for pkg in "${PACKAGES[@]}"; do
@@ -323,7 +323,7 @@ jobs:
             throw "Unsupported runner arch: $Arch"
           }
 
-          $PackageName = "@exrivalis/backlog-fork-windows-$Arch"
+          $PackageName = "@exrivalis/backlog.md-windows-$Arch"
           $BinaryPath = Join-Path -Path "node_modules/$PackageName" -ChildPath "backlog.exe"
 
           Write-Host "Waiting for $PackageName@$Version to become installable..."
@@ -382,8 +382,8 @@ jobs:
           VERSION="${GITHUB_REF##refs/tags/v}"
           MAX_ATTEMPTS=40
           SLEEP_SECONDS=15
-          EXPECTED_PACKAGE="$(node -e 'const map = { win32: "windows", darwin: "darwin", linux: "linux" }; const platform = map[process.platform]; const arch = process.arch; if (!platform || !["x64","arm64"].includes(arch)) { process.exit(1); } process.stdout.write(`@exrivalis/backlog-fork-${platform}-${arch}`);')"
-          echo "Waiting for @exrivalis/backlog-fork@${VERSION} install + ${EXPECTED_PACKAGE} optional dependency..."
+          EXPECTED_PACKAGE="$(node -e 'const map = { win32: "windows", darwin: "darwin", linux: "linux" }; const platform = map[process.platform]; const arch = process.arch; if (!platform || !["x64","arm64"].includes(arch)) { process.exit(1); } process.stdout.write(`@exrivalis/backlog.md-${platform}-${arch}`);')"
+          echo "Waiting for @exrivalis/backlog.md@${VERSION} install + ${EXPECTED_PACKAGE} optional dependency..."
 
           for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
             rm -rf sanity
@@ -391,8 +391,8 @@ jobs:
             cd sanity
             npm init -y >/dev/null 2>&1
 
-            if npm i "@exrivalis/backlog-fork@${VERSION}" --prefer-online --no-audit --no-fund; then
-              if npx backlog-fork -v; then
+            if npm i "@exrivalis/backlog.md@${VERSION}" --prefer-online --no-audit --no-fund; then
+              if npx @exrivalis/backlog.md -v; then
                 echo "Install sanity succeeded on attempt ${attempt}/${MAX_ATTEMPTS}."
                 exit 0
               fi
@@ -413,7 +413,7 @@ jobs:
             fi
           done
 
-          echo "Install sanity timed out for @exrivalis/backlog-fork@${VERSION}."
+          echo "Install sanity timed out for @exrivalis/backlog.md@${VERSION}."
           exit 1
       - name: Install and run backlog -v (Windows)
         if: ${{ matrix.os == 'windows-latest' }}
@@ -428,8 +428,8 @@ jobs:
             throw "Unsupported runner arch: $Arch"
           }
 
-          $ExpectedPackage = "@exrivalis/backlog-fork-windows-$Arch"
-          Write-Host "Waiting for @exrivalis/backlog-fork@$Version install + $ExpectedPackage optional dependency..."
+          $ExpectedPackage = "@exrivalis/backlog.md-windows-$Arch"
+          Write-Host "Waiting for @exrivalis/backlog.md@$Version install + $ExpectedPackage optional dependency..."
 
           for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
             if (Test-Path "sanity") {
@@ -440,9 +440,9 @@ jobs:
 
             try {
               npm init -y | Out-Null
-              npm i "@exrivalis/backlog-fork@$Version" --prefer-online --no-audit --no-fund
+              npm i "@exrivalis/backlog.md@$Version" --prefer-online --no-audit --no-fund
               if ($LASTEXITCODE -eq 0) {
-                npx backlog-fork -v
+                npx @exrivalis/backlog.md -v
                 if ($LASTEXITCODE -eq 0) {
                   Write-Host "Install sanity succeeded on attempt $attempt/$MaxAttempts."
                   exit 0

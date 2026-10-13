@@ -16,12 +16,10 @@ function printInstallHelp() {
 		}
 		console.error("To fix on macOS:");
 		console.error("  - Compare architectures: `node -p process.arch` vs `uname -m` (arm64 = Apple Silicon hardware).");
-		console.error("  - npm on Apple Silicon: `arch -arm64 npm i -g @exrivalis/backlog-fork`");
-		console.error("  - Bun on Apple Silicon: `arch -arm64 bun add -g @exrivalis/backlog-fork`");
+		console.error("  - npm on Apple Silicon: `arch -arm64 npm i -g @exrivalis/backlog.md`");
+		console.error("  - Bun on Apple Silicon: `arch -arm64 bun add -g @exrivalis/backlog.md`");
 	} else {
-		console.error(
-			"Reinstall @exrivalis/backlog-fork so the platform package matching this architecture gets installed.",
-		);
+		console.error("Reinstall @exrivalis/backlog.md so the platform package matching this architecture gets installed.");
 	}
 }
 
@@ -49,7 +47,7 @@ function handleSpawnError(binaryPath, error) {
 		console.error("The binary is missing or was built for a different CPU architecture.");
 		printInstallHelp();
 	} else {
-		console.error("Failed to start backlog-fork:", error);
+		console.error("Failed to start backlog.md:", error);
 	}
 	process.exit(1);
 }
@@ -72,7 +70,7 @@ function main() {
 		// Filter any accidental deep path to our platform package binary
 		try {
 			const pattern =
-				/node_modules[/\\]@exrivalis[/\\]backlog-fork-(darwin|linux|windows)-[^/\\]+[/\\]backlog(\.exe)?$/i;
+				/node_modules[/\\]@exrivalis[/\\]backlog\.md-(darwin|linux|windows)-[^/\\]+[/\\]backlog(\.exe)?$/i;
 			return !pattern.test(arg);
 		} catch {
 			return true;
@@ -96,7 +94,7 @@ function main() {
 	child.on("exit", (code, signal) => {
 		if (isArchitectureSignal(signal)) {
 			// Typical symptom of running a binary built for the other CPU architecture
-			console.error(`\nbacklog-fork crashed with ${signal} (illegal instruction): ${binaryPath}`);
+			console.error(`\nbacklog.md crashed with ${signal} (illegal instruction): ${binaryPath}`);
 			console.error("The installed binary was likely built for a different CPU architecture.");
 			printInstallHelp();
 			process.exit(1);

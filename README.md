@@ -70,6 +70,19 @@ Backlog.md itself. The full task ledger lives in this repo's [backlog folder](ba
 
 * 💻 Cross-platform (macOS, Linux, Windows) · 🆓 MIT-licensed & open-source
 
+### Added by this fork
+
+* 🗑️ **Explicit deletion** -- `backlog task|draft|doc delete` removes a file on explicit request after a reference preview (`--preview`, `--confirm`, `--unlink`, `--reassign-to`); archive and complete stay the defaults
+
+* 🏛️ **Architecture decision records (ADRs)** -- decisions with `--kind architecture` carry a validated lifecycle: supersession with full-scope coverage, archive/restore with stable identity, and guidance that resolves retired ADRs to their authoritative replacement
+
+* 📐 **Specifications and changes** -- documents of type `specification` state current behavior with stable requirement IDs; an optional change document proposes a delta that `doc validate`, `doc preview`, `doc approve`, and `doc apply` review and integrate
+
+* ✏️ **Comment correction with history** -- `task|draft edit --edit-comment`/`--redact-comment` correct one comment by its `#<index>@<fingerprint>` target while keeping the original as visible history
+
+* 🔧 **Semantic edit gaps closed** -- CLI `decision view`/`decision edit` and `milestone edit --description`
+
+* 🤝 **Human and agent parity** -- the same operations in the browser and terminal UI (explicit-delete dialogs, ADR guidance views, change previews), and shipped agent instructions that teach the delete, ADR, and change rules
 
 ---
 
@@ -96,29 +109,31 @@ backlog init "Personal Planning" --no-git
 
 ### Installing this fork
 
-This repository is a fork of [MrLesk/Backlog.md](https://github.com/MrLesk/Backlog.md), published as the scoped npm package `@exrivalis/backlog-fork` with the executable `backlog-fork`. It installs and runs alongside upstream Backlog.md (package `backlog.md`, executable `backlog`) in the same environment without collision; each project uses whichever CLI created or manages it.
+This repository is a fork of [MrLesk/Backlog.md](https://github.com/MrLesk/Backlog.md), published as the scoped npm package `@exrivalis/backlog.md` with the executable `backlog.md`. It installs and runs alongside upstream Backlog.md (package `backlog.md`, executable `backlog`) in the same environment without collision; each project uses whichever CLI created or manages it.
 
 ```bash
-npm i -g @exrivalis/backlog-fork
-# or: bun add -g @exrivalis/backlog-fork
+npm i -g @exrivalis/backlog.md
+# or: bun add -g @exrivalis/backlog.md
 
-backlog-fork init "My Awesome Project"
+backlog.md init "My Awesome Project"
 ```
+
+Running one-off: `npx @exrivalis/backlog.md init "My Project"` (the scoped name runs this fork; plain `npx backlog.md` runs upstream).
 
 Fork versions track the upstream Backlog.md release they are built from (for example `1.53.0`).
 
 ```bash
 # Pin a version in a consuming project
-npm i -g @exrivalis/backlog-fork@1.53.0
+npm i -g @exrivalis/backlog.md@1.53.0
 
 # Upgrade
-npm i -g @exrivalis/backlog-fork@latest
+npm i -g @exrivalis/backlog.md@latest
 
 # Roll back to a previous version
-npm i -g @exrivalis/backlog-fork@<previous-version>
+npm i -g @exrivalis/backlog.md@<previous-version>
 
 # Verify which CLIs are active
-backlog-fork -v
+backlog.md -v
 backlog -v
 ```
 

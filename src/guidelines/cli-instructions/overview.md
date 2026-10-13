@@ -42,7 +42,7 @@ Use the CLI for Backlog changes. Never edit task, draft, document, decision, or 
 
 ### Decisions and ADRs
 
-`backlog decision list` and `backlog search` return applicable guidance only: accepted ADRs and ordinary decisions. Rejected, superseded, and archived ADRs are history — never cite them as current guidance for new work.
+`backlog decision list` and `backlog search` return applicable guidance only: accepted ADRs and ordinary decisions. Rejected, deprecated, superseded, and archived ADRs are history — never cite them as current guidance for new work.
 
 For an old ID, run `backlog decision view <decision-id> --plain`. A retired ADR identifies its retired state and the accepted ADR that now governs its scope. `backlog decision list --all` shows every record, including archived ones.
 

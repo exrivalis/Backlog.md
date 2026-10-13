@@ -59,7 +59,7 @@ remains fully synchronized and up-to-date.
 - Markdown task files live under **`backlog/tasks/`** (drafts under **`backlog/drafts/`**)
 - Files are named: `task-<id> - <title>.md` (e.g., `task-42 - Add GraphQL resolver.md`)
 - Project documentation is in **`backlog/docs/`**
-- Project decisions are in **`backlog/decisions/`**; retired ADRs (rejected, superseded, archived) are historical evidence, never current guidance — `backlog decision list` and search return applicable accepted ADRs only, and `backlog decision view <id> --plain` names an old ID's authoritative replacement
+- Project decisions are in **`backlog/decisions/`**; retired ADRs (rejected, deprecated, superseded, archived) are historical evidence, never current guidance — `backlog decision list` and search return applicable accepted ADRs only, and `backlog decision view <id> --plain` names an old ID's authoritative replacement
 
 ### 🔧 **ACTING** (How to change things)
 

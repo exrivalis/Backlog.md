@@ -3,7 +3,7 @@ import type { Decision } from "../types/index.ts";
 /** The only supported decision kind discriminant; "architecture" marks an ADR. */
 export const ADR_KIND = "architecture";
 
-export const ADR_STATUSES = ["proposed", "accepted", "rejected", "superseded"] as const;
+export const ADR_STATUSES = ["proposed", "accepted", "deprecated", "rejected", "superseded"] as const;
 export type AdrStatus = (typeof ADR_STATUSES)[number];
 
 /** An applicable ADR still governs current work; anything else (rejected, deprecated, superseded) is retired. */
@@ -32,10 +32,11 @@ export function isDecisionIdReference(entry: string): boolean {
 	return DECISION_ID_REFERENCE_PATTERN.test(entry.trim());
 }
 
-/** Terminal states: a rejected or superseded ADR no longer accepts status changes. */
+/** Terminal states: a deprecated, rejected, or superseded ADR no longer accepts status changes. */
 const ADR_TRANSITIONS: Record<AdrStatus, readonly AdrStatus[]> = {
 	proposed: ["accepted", "rejected"],
-	accepted: [],
+	accepted: ["deprecated"],
+	deprecated: [],
 	rejected: [],
 	superseded: [],
 };
@@ -72,7 +73,7 @@ export function assertAdrStatusValue(decisionId: string, status: string): void {
 	}
 }
 
-/** Validates an ADR status change; accepted, rejected, and superseded ADRs only leave their state via supersession. */
+/** Validates an ADR status change; deprecated, rejected, and superseded ADRs keep their state. */
 export function assertAdrTransition(decisionId: string, from: string, to: string): void {
 	if (from === to) return;
 	if (!(ADR_STATUSES as readonly string[]).includes(from)) {
@@ -84,10 +85,10 @@ export function assertAdrTransition(decisionId: string, from: string, to: string
 	if (allowed && !allowed.includes(to as AdrStatus)) {
 		const hint =
 			from === "accepted"
-				? "An accepted ADR is retired only by superseding it with a replacement that covers its full scope."
+				? "An accepted ADR is retired by superseding it with a replacement that covers its full scope, or by deprecating it when no replacement applies."
 				: from === "proposed"
 					? "Only an accepted ADR can be superseded; reject a proposal instead."
-					: "A rejected or superseded ADR keeps its state.";
+					: "A deprecated, rejected, or superseded ADR keeps its state.";
 		throw new Error(`Cannot change architecture decision ${decisionId} from ${from} to ${to}. ${hint}`);
 	}
 }

@@ -4461,7 +4461,7 @@ export class Core {
 			current = next;
 		}
 		if (isRetiredAdr(current)) {
-			// Retired without a successor link: a rejection has no replacement to offer.
+			// Retired without a successor link: a rejection or deprecation has no replacement to offer.
 			return { decision, retired };
 		}
 		if (current.status !== "accepted" || current.archived) {
@@ -4558,7 +4558,7 @@ export class Core {
 		if (!isRetiredAdrStatus(decision.status)) {
 			const hint =
 				decision.status === "accepted"
-					? "An accepted ADR is still applicable; supersede it with 'backlog decision supersede' before archiving."
+					? "An accepted ADR is still applicable; supersede it with 'backlog decision supersede' or deprecate it before archiving."
 					: "A proposed ADR is not retired; reject it instead.";
 			throw new Error(
 				`Cannot archive ${decision.id}: only a rejected, deprecated, or superseded ADR can be archived. ${hint}`,

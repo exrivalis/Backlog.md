@@ -54,7 +54,7 @@ If you discover work that is outside the task's acceptance criteria, stop and as
 
 ### Specifications, Changes, and ADRs
 
-Specifications state current required behavior; change documents are proposed deltas that alter a spec only after `backlog doc approve` and `backlog doc apply` with human review. Most tasks need neither. Cite only applicable accepted ADRs from `backlog decision list` as current guidance; a superseded or archived ADR is history — `backlog decision view <decision-id>` names its replacement instead.
+Specifications state current required behavior; change documents are proposed deltas that alter a spec only after `backlog doc approve` and `backlog doc apply` with human review. Most tasks need neither. Cite only applicable accepted ADRs from `backlog decision list` as current guidance; a deprecated, superseded, or archived ADR is history — `backlog decision view <decision-id>` names its replacement instead.
 
 ### Working With Subtasks
 

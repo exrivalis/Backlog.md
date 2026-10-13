@@ -111,11 +111,11 @@ describe("CLI architecture decision records (ADRs)", () => {
 		// An accepted ADR leaves its state only through supersession.
 		const unaccept = await $`bun ${CLI_PATH} decision edit ${id} -s rejected`.cwd(TEST_DIR).quiet().nothrow();
 		expect(unaccept.exitCode).not.toBe(0);
-		expect(unaccept.stderr.toString()).toContain("An accepted ADR is retired only by superseding it");
+		expect(unaccept.stderr.toString()).toContain("An accepted ADR is retired by superseding it");
 
 		const reopen = await $`bun ${CLI_PATH} decision edit ${id} -s proposed`.cwd(TEST_DIR).quiet().nothrow();
 		expect(reopen.exitCode).not.toBe(0);
-		expect(reopen.stderr.toString()).toContain("An accepted ADR is retired only by superseding it");
+		expect(reopen.stderr.toString()).toContain("An accepted ADR is retired by superseding it");
 
 		const invalid = await $`bun ${CLI_PATH} decision edit ${id} -s banana`.cwd(TEST_DIR).quiet().nothrow();
 		expect(invalid.exitCode).not.toBe(0);
@@ -129,7 +129,7 @@ describe("CLI architecture decision records (ADRs)", () => {
 
 		const revive = await $`bun ${CLI_PATH} decision edit ${id} -s accepted`.cwd(TEST_DIR).quiet().nothrow();
 		expect(revive.exitCode).not.toBe(0);
-		expect(revive.stderr.toString()).toContain("A rejected or superseded ADR keeps its state.");
+		expect(revive.stderr.toString()).toContain("A deprecated, rejected, or superseded ADR keeps its state.");
 
 		// Superseding a proposal is refused; rejection is the way out.
 		const replacement = await createAcceptedAdrViaCli("Use SQLite for sessions", "session storage");
@@ -177,7 +177,7 @@ describe("CLI architecture decision records (ADRs)", () => {
 		// The retired ADR is no longer editable back into authority.
 		const revive = await $`bun ${CLI_PATH} decision edit ${oldId} -s accepted`.cwd(TEST_DIR).quiet().nothrow();
 		expect(revive.exitCode).not.toBe(0);
-		expect(revive.stderr.toString()).toContain("A rejected or superseded ADR keeps its state.");
+		expect(revive.stderr.toString()).toContain("A deprecated, rejected, or superseded ADR keeps its state.");
 	});
 
 	it("refuses partial supersession and leaves the old ADR authoritative", async () => {

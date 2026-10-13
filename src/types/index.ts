@@ -222,7 +222,7 @@ export interface Decision {
 	id: string;
 	title: string;
 	date: string;
-	status: "proposed" | "accepted" | "rejected" | "superseded";
+	status: "proposed" | "accepted" | "deprecated" | "rejected" | "superseded";
 	context: string;
 	decision: string;
 	consequences: string;

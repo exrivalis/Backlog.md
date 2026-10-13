@@ -1,6 +1,6 @@
 {
   "name": "@exrivalis/backlog.md",
-  "version": "1.53.0",
+  "version": "1.54.0",
   "type": "module",
   "module": "src/cli.ts",
   "files": [
@@ -9,7 +9,7 @@
     "LICENSE"
   ],
   "bin": {
-    "backlog.md": "scripts/cli.cjs"
+    "backlog": "scripts/cli.cjs"
   },
   "optionalDependencies": {
     "@exrivalis/backlog.md-darwin-arm64": "*",

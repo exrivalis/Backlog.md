@@ -109,22 +109,22 @@ backlog init "Personal Planning" --no-git
 
 ### Installing this fork
 
-This repository is a fork of [MrLesk/Backlog.md](https://github.com/MrLesk/Backlog.md), published as the scoped npm package `@exrivalis/backlog.md` with the executable `backlog.md`. It installs and runs alongside upstream Backlog.md (package `backlog.md`, executable `backlog`) in the same environment without collision; each project uses whichever CLI created or manages it.
+This repository is a fork of [MrLesk/Backlog.md](https://github.com/MrLesk/Backlog.md), published as the scoped npm package `@exrivalis/backlog.md` with the executable `backlog`. The executable name matches upstream's, so the fork and upstream cannot both be installed globally on one machine — the most recently installed one owns the `backlog` command. Project files stay plain Backlog.md Markdown either way.
 
 ```bash
 npm i -g @exrivalis/backlog.md
 # or: bun add -g @exrivalis/backlog.md
 
-backlog.md init "My Awesome Project"
+backlog init "My Awesome Project"
 ```
 
-Running one-off: `npx @exrivalis/backlog.md init "My Project"` (the scoped name runs this fork; plain `npx backlog.md` runs upstream).
+Running one-off: `npx @exrivalis/backlog.md init "My Project"` (the scoped name always runs this fork; plain `npx backlog.md` resolves to the upstream package).
 
-Fork versions track the upstream Backlog.md release they are built from (for example `1.53.0`).
+The fork versions independently (`1.54.0` is its first feature release, built on upstream `1.53.0`).
 
 ```bash
 # Pin a version in a consuming project
-npm i -g @exrivalis/backlog.md@1.53.0
+npm i -g @exrivalis/backlog.md@1.54.0
 
 # Upgrade
 npm i -g @exrivalis/backlog.md@latest
@@ -132,8 +132,7 @@ npm i -g @exrivalis/backlog.md@latest
 # Roll back to a previous version
 npm i -g @exrivalis/backlog.md@<previous-version>
 
-# Verify which CLIs are active
-backlog.md -v
+# Verify the installed version
 backlog -v
 ```
 

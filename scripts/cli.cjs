@@ -47,7 +47,7 @@ function handleSpawnError(binaryPath, error) {
 		console.error("The binary is missing or was built for a different CPU architecture.");
 		printInstallHelp();
 	} else {
-		console.error("Failed to start backlog.md:", error);
+		console.error("Failed to start backlog:", error);
 	}
 	process.exit(1);
 }
@@ -94,7 +94,7 @@ function main() {
 	child.on("exit", (code, signal) => {
 		if (isArchitectureSignal(signal)) {
 			// Typical symptom of running a binary built for the other CPU architecture
-			console.error(`\nbacklog.md crashed with ${signal} (illegal instruction): ${binaryPath}`);
+			console.error(`\nbacklog crashed with ${signal} (illegal instruction): ${binaryPath}`);
 			console.error("The installed binary was likely built for a different CPU architecture.");
 			printInstallHelp();
 			process.exit(1);
